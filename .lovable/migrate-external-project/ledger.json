@@ -1,0 +1,20 @@
+{
+  "source": "https://github.com/ahmedredae8-stack/broadside-card-brawl",
+  "destination": "Lovable Cloud (new project database)",
+  "capabilities": [
+    {"capability":"code","source":"GitHub repository archive","outcome":"migrate","status":"inspected; migration pending","next_action":"Port the full game into this project and verify routes/build."},
+    {"capability":"schema","source":"Supabase/Drizzle SQL migrations","outcome":"migrate","status":"schema files detected; migration pending","next_action":"Adapt schema, grants, RLS, and auth references for the new Cloud database."},
+    {"capability":"records","source":"Existing Supabase project","outcome":"migrate","status":"pending export; no application records included in repository","next_action":"Request sanitized CSV/JSON exports after preview."},
+    {"capability":"auth identities","source":"Existing Supabase Auth","outcome":"migrate","status":"pending export and implementation","next_action":"Request user identity export and support verified first-login password setup."},
+    {"capability":"authorization","source":"Repository SQL policies and app code","outcome":"migrate","status":"pending detailed inspection","next_action":"Preserve role boundaries and verify access rules in Cloud."},
+    {"capability":"uploaded file bytes","source":"Repository asset pointers and bundled files","outcome":"migrate","status":"pending asset inventory","next_action":"Inventory transferable files and migrate compatible stored media."},
+    {"capability":"external providers","source":"Repository integrations","outcome":"preserve","status":"pending detailed inspection","next_action":"Identify compatible integrations and preserve their configuration paths."},
+    {"capability":"public endpoints","source":"Repository server routes","outcome":"preserve","status":"pending detailed inspection","next_action":"Identify and preserve existing public endpoints and callers."},
+    {"capability":"callbacks","source":"Repository auth and provider callbacks","outcome":"migrate or preserve as applicable","status":"pending detailed inspection","next_action":"Replace source-auth callbacks; preserve other callbacks."},
+    {"capability":"webhooks","source":"Repository integrations","outcome":"preserve","status":"pending detailed inspection","next_action":"Identify and preserve existing webhook behavior."},
+    {"capability":"schedules","source":"Repository scheduled tasks","outcome":"preserve","status":"pending detailed inspection","next_action":"Identify and preserve scheduled behavior."},
+    {"capability":"secrets","source":"Existing project configuration","outcome":"preserve compatible providers","status":"pending; secret values not inspected or copied","next_action":"Request only required provider secrets securely if needed for verification."},
+    {"capability":"cutover","source":"Existing Supabase project and callbacks","outcome":"migrate","status":"pending","next_action":"Document changed database endpoints after the app is verified."},
+    {"capability":"verification","source":"Migrated app","outcome":"verify","status":"pending","next_action":"Verify routes, game behavior, safe data flows, and authentication when user export is available."}
+  ]
+}
