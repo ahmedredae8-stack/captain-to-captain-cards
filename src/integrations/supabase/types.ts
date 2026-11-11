@@ -14,16 +14,398 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      ai_access_requests: {
+        Row: {
+          agent_name: string
+          created_at: string
+          id: string
+          purpose: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          scope: string
+          status: string
+        }
+        Insert: {
+          agent_name: string
+          created_at?: string
+          id?: string
+          purpose: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          scope?: string
+          status?: string
+        }
+        Update: {
+          agent_name?: string
+          created_at?: string
+          id?: string
+          purpose?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          scope?: string
+          status?: string
+        }
+        Relationships: []
+      }
+      artwork_poses: {
+        Row: {
+          category: string
+          created_at: string
+          created_by: string
+          id: string
+          image_path: string
+          pose: string
+          subject: string
+          updated_at: string
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          created_by: string
+          id?: string
+          image_path: string
+          pose: string
+          subject: string
+          updated_at?: string
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          created_by?: string
+          id?: string
+          image_path?: string
+          pose?: string
+          subject?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      catches: {
+        Row: {
+          created_at: string
+          fish_id: string
+          id: string
+          qty: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          fish_id: string
+          id?: string
+          qty?: number
+          user_id?: string
+        }
+        Update: {
+          created_at?: string
+          fish_id?: string
+          id?: string
+          qty?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
+      fleet_layout: {
+        Row: {
+          created_at: string
+          id: string
+          lanes: Json
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id: string
+          lanes?: Json
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          lanes?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      friendships: {
+        Row: {
+          addressee_id: string
+          created_at: string
+          id: string
+          requester_id: string
+          status: string
+        }
+        Insert: {
+          addressee_id: string
+          created_at?: string
+          id?: string
+          requester_id: string
+          status?: string
+        }
+        Update: {
+          addressee_id?: string
+          created_at?: string
+          id?: string
+          requester_id?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "friendships_addressee_id_fkey"
+            columns: ["addressee_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "friendships_requester_id_fkey"
+            columns: ["requester_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      messages: {
+        Row: {
+          body: string
+          created_at: string
+          id: string
+          recipient_id: string | null
+          sender_id: string
+        }
+        Insert: {
+          body: string
+          created_at?: string
+          id?: string
+          recipient_id?: string | null
+          sender_id: string
+        }
+        Update: {
+          body?: string
+          created_at?: string
+          id?: string
+          recipient_id?: string | null
+          sender_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "messages_recipient_id_fkey"
+            columns: ["recipient_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "messages_sender_id_fkey"
+            columns: ["sender_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      players: {
+        Row: {
+          avatar_index: number
+          avatar_url: string | null
+          created_at: string
+          id: string
+          last_seen: string
+          name: string
+          score: number
+          theme_id: string
+          user_id: string | null
+          username_norm: string | null
+        }
+        Insert: {
+          avatar_index?: number
+          avatar_url?: string | null
+          created_at?: string
+          id?: string
+          last_seen?: string
+          name: string
+          score?: number
+          theme_id?: string
+          user_id?: string | null
+          username_norm?: string | null
+        }
+        Update: {
+          avatar_index?: number
+          avatar_url?: string | null
+          created_at?: string
+          id?: string
+          last_seen?: string
+          name?: string
+          score?: number
+          theme_id?: string
+          user_id?: string | null
+          username_norm?: string | null
+        }
+        Relationships: []
+      }
+      ship_overrides: {
+        Row: {
+          description: string | null
+          hidden: boolean
+          name: string | null
+          price: number | null
+          product_id: string
+          updated_at: string
+        }
+        Insert: {
+          description?: string | null
+          hidden?: boolean
+          name?: string | null
+          price?: number | null
+          product_id: string
+          updated_at?: string
+        }
+        Update: {
+          description?: string | null
+          hidden?: boolean
+          name?: string | null
+          price?: number | null
+          product_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      tribe_members: {
+        Row: {
+          contribution: number
+          created_at: string
+          id: string
+          player_id: string
+          rank: string
+          tribe_id: string
+        }
+        Insert: {
+          contribution?: number
+          created_at?: string
+          id?: string
+          player_id: string
+          rank?: string
+          tribe_id: string
+        }
+        Update: {
+          contribution?: number
+          created_at?: string
+          id?: string
+          player_id?: string
+          rank?: string
+          tribe_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tribe_members_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: true
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tribe_members_tribe_id_fkey"
+            columns: ["tribe_id"]
+            isOneToOne: false
+            referencedRelation: "tribes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tribe_quest_claims: {
+        Row: {
+          claimed_on: string
+          player_id: string
+          quest_id: string
+        }
+        Insert: {
+          claimed_on?: string
+          player_id: string
+          quest_id: string
+        }
+        Update: {
+          claimed_on?: string
+          player_id?: string
+          quest_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tribe_quest_claims_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tribes: {
+        Row: {
+          created_at: string
+          emblem: string
+          id: string
+          motto: string
+          name: string
+          owner_id: string
+          score: number
+        }
+        Insert: {
+          created_at?: string
+          emblem?: string
+          id?: string
+          motto?: string
+          name: string
+          owner_id: string
+          score?: number
+        }
+        Update: {
+          created_at?: string
+          emblem?: string
+          id?: string
+          motto?: string
+          name?: string
+          owner_id?: string
+          score?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tribes_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
+            referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      user_roles: {
+        Row: {
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      claim_tribe_quest: {
+        Args: { _player_id: string; _quest_id: string }
+        Returns: number
+      }
+      owns_player: { Args: { _player_id: string }; Returns: boolean }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "moderator" | "user"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +532,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "moderator", "user"],
+    },
   },
 } as const
