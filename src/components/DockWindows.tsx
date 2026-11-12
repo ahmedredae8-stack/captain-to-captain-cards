@@ -33,7 +33,17 @@ export function RankingsWindow({ onPick, me, online = [], initial = "events" }: 
   useEffect(() => {
     let active = true;
     void supabase.from("player_public_profiles").select("*").order("score", { ascending: false }).limit(25).then(({ data }) => {
-      if (active) { setPlayers(data ?? []); setLoading(false); }
+      if (active) {
+        setPlayers((data ?? [])
+          .filter((player) => player.id !== null && player.name !== null)
+          .map((player) => ({
+            id: player.id!,
+            name: player.name!,
+            score: player.score ?? 0,
+            avatar_index: player.avatar_index ?? 0,
+          })));
+        setLoading(false);
+      }
     });
     return () => { active = false; };
   }, []);
