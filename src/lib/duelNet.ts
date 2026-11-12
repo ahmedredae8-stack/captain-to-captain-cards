@@ -61,7 +61,7 @@ export const playerFromMeta = (m: LobbyMeta): Player => ({
 });
 
 const LOBBY = "duel-lobby";
-const FRESH_MS = 70_000;
+const FRESH_MS = 20_000;
 const CHALLENGE_TTL = 15_000;
 
 /**
@@ -112,11 +112,6 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
         void chan.send({ type: "broadcast", event: "decline", payload: { to: p.from.id, matchId: p.matchId, blocked: true } });
         return;
       }
-      // Away (tab hidden) and the captain allowed it in settings: their AI captain takes the fight.
-      if (typeof document !== "undefined" && document.hidden && localStorage.getItem("ib.autoAI") !== "off") {
-        void chan.send({ type: "broadcast", event: "decline", payload: { to: p.from.id, matchId: p.matchId, ai: true } });
-        return;
-      }
       setIncoming((prev) => (prev && prev.until > Date.now() && prev.from.id === p.from.id ? prev : { matchId: p.matchId, from: p.from, until: Date.now() + CHALLENGE_TTL }));
     });
 
@@ -152,10 +147,21 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
 
     const tick = window.setInterval(() => {
       setIncoming((c) => (c && c.until < Date.now() ? null : c));
-      void chan.track(metaOf(meRef.current ?? me, queueing));
+      if (!document.hidden) void chan.track(metaOf(meRef.current ?? me, queueing));
     }, 5_000);
 
+    // Leave the online list the moment the game is hidden or closed; rejoin when it's back.
+    const onVis = () => {
+      if (document.hidden) void chan.untrack();
+      else if (meRef.current) void chan.track(metaOf(meRef.current, queueing));
+    };
+    const onLeave = () => { void chan.untrack(); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pagehide", onLeave);
+
     return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pagehide", onLeave);
       window.clearInterval(tick);
       window.clearTimeout(pending.current?.timer);
       if (pending.current) { pending.current.resolve("timeout"); pending.current = null; }

@@ -103,19 +103,16 @@ function Index() {
   const [duelNotice, setDuelNotice] = useState<string | null>(null);
   // Preload the King of Seas game in the background as soon as the harbour opens.
   useEffect(() => { const t = window.setTimeout(() => { void prepareGame().catch(() => undefined); }, 1500); return () => window.clearTimeout(t); }, []);
-  /** Attack: online captains get a real fight request; offline / AI captains are fought by their AI copy. */
+  /** Attack: only a real, online captain who accepts. No AI ever replaces a person. */
   const attack = async (target: import("@/lib/player").Player) => {
     if (!player) return;
     const live = lobby.others.find((o) => o.id === target.id);
-    if (!live || isDecoy(target.id)) { startDuel(target, "", "host"); return; }
+    if (!live || isDecoy(target.id)) { setProfile(null); setDuelNotice(`${target.name} غير متصل الآن — لا يمكن بدء القتال`); window.setTimeout(() => setDuelNotice(null), 2500); return; }
     setProfile(null);
     const r = await lobby.challenge(live);
-    if (typeof r === "object") startDuel(target, r.matchId, "host");
-    else if (r === "blocked") setDuelNotice(`${target.name} لا يقبل تحدياتك`);
-    else {
-      setDuelNotice(r === "ai" ? `${target.name} سلّم القيادة لقبطانه الآلي — المعركة تبدأ` : r === "declined" ? `${target.name} رفض — قبطانه الآلي سيقاتلك` : `${target.name} لم يرد — قبطانه الآلي سيقاتلك`);
-      window.setTimeout(() => { setDuelNotice(null); startDuel(target, "", "host"); }, 1400);
-    }
+    if (typeof r === "object") { startDuel(target, r.matchId, "host"); return; }
+    setDuelNotice(r === "blocked" ? `${target.name} لا يقبل تحدياتك` : r === "timeout" ? `${target.name} لم يرد — أُلغي التحدي` : `${target.name} رفض التحدي — لا قتال`);
+    window.setTimeout(() => setDuelNotice(null), 2500);
   };
   const [chatPeer, setChatPeer] = useState<import("@/lib/player").Player | null>(null);
   const [phase, setPhase] = useState(currentPhase());
@@ -260,7 +257,7 @@ function Index() {
         </GameWindow>
       )}
       {win === "stats" && <GameWindow title="سجل القباطنة" size="lg" onClose={() => setWin(null)}><RankingsWindow me={player} online={lobby.others} onPick={(p) => { setWin(null); setProfile(p); }} /></GameWindow>}
-      {profile && !foe && <PirateProfile player={profile} live={isDecoy(profile.id) || lobby.others.some((o) => o.id === profile.id)} isMe={profile.id === player?.id} onClose={() => setProfile(null)} onMessage={() => { if (isDecoy(profile.id)) { setDuelNotice(`${profile.name} في وسط معركة الآن — جرّب مراسلته لاحقاً`); setProfile(null); return; } setChatPeer(profile); setProfile(null); setWin("chat"); }} onAttack={() => { void attack(profile); }} />}
+      {profile && !foe && <PirateProfile player={profile} live={lobby.others.some((o) => o.id === profile.id)} isMe={profile.id === player?.id} onClose={() => setProfile(null)} onMessage={() => { if (isDecoy(profile.id)) { setDuelNotice(`${profile.name} في وسط معركة الآن — جرّب مراسلته لاحقاً`); setProfile(null); return; } setChatPeer(profile); setProfile(null); setWin("chat"); }} onAttack={() => { void attack(profile); }} />}
       <DuelRequests incoming={lobby.incoming} outgoing={lobby.outgoing} notice={duelNotice} onCancel={lobby.cancelOutgoing} onDismiss={() => setDuelNotice(null)} onAnswer={(c, r) => { playSfx("click", 0.7); const m = lobby.respond(c, r); if (m) startDuel(m.foe, m.matchId, m.role); }} />
       {foe && player && <BattleScreen me={player} foe={foe} {...(duel ? { online: duel } : {})} onClose={() => { setFoe(null); setDuel(null); setProfile(null); }} />}
       {win === "bag" && <GameWindow title="مخزن العتاد" size="lg" onClose={() => setWin(null)}><InventoryWindow player={player} /></GameWindow>}
