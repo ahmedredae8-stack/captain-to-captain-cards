@@ -13,7 +13,7 @@ export function LiveDuels({ me, online, onPick }: { me: Player | null; online: L
 
   useEffect(() => {
     let alive = true;
-    void supabase.from("players").select("*").order("last_seen", { ascending: false }).limit(200).then(({ data }) => { if (alive) setAll((data ?? []) as Player[]); });
+    void supabase.from("player_public_profiles").select("*").order("last_seen", { ascending: false }).limit(200).then(({ data }) => { if (alive) setAll((data ?? []) as Player[]); });
     return () => { alive = false; };
   }, []);
 

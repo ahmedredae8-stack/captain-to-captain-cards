@@ -18,7 +18,7 @@ export function ChatPanel({ me, peer }: { me: Player; peer?: Player | null }) {
   const hydrate = useCallback(async (ids: string[]) => {
     const missing = [...new Set(ids)].filter((id) => !people[id]);
     if (!missing.length) return;
-    const { data } = await supabase.from("players").select("*").in("id", missing);
+    const { data } = await supabase.from("player_public_profiles").select("*").in("id", missing);
     if (data?.length) setPeople((p) => ({ ...p, ...Object.fromEntries((data as Player[]).map((r) => [r.id, r])) }));
   }, [people]);
 

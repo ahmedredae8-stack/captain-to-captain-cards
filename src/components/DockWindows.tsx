@@ -26,13 +26,13 @@ export function RankingsWindow({ onPick, me, online = [], initial = "events" }: 
     const term = q.trim();
     if (term.length < 1) { setFound(null); return; }
     const t = window.setTimeout(() => {
-      void supabase.from("players").select("*").ilike("name", `%${term.replace(/[%_]/g, "")}%`).limit(20).then(({ data }) => setFound((data ?? []) as Player[]));
+      void supabase.from("player_public_profiles").select("*").ilike("name", `%${term.replace(/[%_]/g, "")}%`).limit(20).then(({ data }) => setFound((data ?? []) as Player[]));
     }, 250);
     return () => window.clearTimeout(t);
   }, [q]);
   useEffect(() => {
     let active = true;
-    void supabase.from("players").select("*").order("score", { ascending: false }).limit(25).then(({ data }) => {
+    void supabase.from("player_public_profiles").select("*").order("score", { ascending: false }).limit(25).then(({ data }) => {
       if (active) { setPlayers(data ?? []); setLoading(false); }
     });
     return () => { active = false; };
