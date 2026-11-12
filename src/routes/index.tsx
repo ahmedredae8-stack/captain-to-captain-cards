@@ -97,7 +97,7 @@ function Index() {
     if (!player?.id) return;
     const id = player.id;
     void touchPresence(id);
-    const t = window.setInterval(() => { void touchPresence(id); }, 30_000);
+    const t = window.setInterval(() => { if (!document.hidden) void touchPresence(id); }, 20_000);
     return () => window.clearInterval(t);
   }, [player?.id]);
   const [duelNotice, setDuelNotice] = useState<string | null>(null);

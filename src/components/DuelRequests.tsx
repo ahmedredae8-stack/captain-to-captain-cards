@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Ban, Bot, Check, Swords, X } from "lucide-react";
+import { Ban, Check, Swords, X } from "lucide-react";
 import { CaptainAvatar } from "@/components/GameSprite";
 import type { Challenge } from "@/lib/duelNet";
 
