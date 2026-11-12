@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Ban, Bot, Check, Swords, X } from "lucide-react";
+import { Ban, Check, Swords, X } from "lucide-react";
 import { CaptainAvatar } from "@/components/GameSprite";
 import type { Challenge } from "@/lib/duelNet";
 
@@ -24,7 +24,6 @@ export function DuelRequests({ incoming, outgoing, notice, onAnswer, onCancel, o
           <span><b>{incoming.from.name}</b> يطلب قتالك! ({left})</span>
           <div className="duel-replies">
             <button type="button" className="tos-btn" onClick={() => onAnswer(incoming, "accept")}><Check className="h-4 w-4" />العب</button>
-            <button type="button" className="tos-btn duel-ai" onClick={() => onAnswer(incoming, "ai")}><Bot className="h-4 w-4" />قبطاني الآلي</button>
             <button type="button" className="tos-btn duel-no" onClick={() => onAnswer(incoming, "decline")}><X className="h-4 w-4" />رفض</button>
             <button type="button" className="tos-btn duel-block" onClick={() => onAnswer(incoming, "block")}><Ban className="h-4 w-4" />رفض نهائي</button>
           </div>

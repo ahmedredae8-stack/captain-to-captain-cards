@@ -73,7 +73,7 @@ export async function touchPresence(id: string) {
 }
 
 export function isOnline(lastSeen: string) {
-  return Date.now() - new Date(lastSeen).getTime() < 90_000;
+  return Date.now() - new Date(lastSeen).getTime() < 45_000;
 }
 
 export function initials(name: string) {

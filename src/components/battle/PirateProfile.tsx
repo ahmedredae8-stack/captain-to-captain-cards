@@ -4,7 +4,7 @@ import { powerOf, LOADOUT } from "@/components/battle/BattleScreen";
 import { fleetCatalog } from "@/lib/fleetCatalog";
 import { SEA_WORLDS } from "@/lib/seaWorld";
 import { WEAPONS } from "@/game/duel";
-import { isOnline, type Player } from "@/lib/player";
+import type { Player } from "@/lib/player";
 import { playSfx } from "@/lib/sound";
 
 const hashSeed = (s: string) => { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
@@ -12,7 +12,7 @@ const hashSeed = (s: string) => { let h = 2166136261; for (const c of s) h = Mat
 /** Captain dossier: their sea, fleet and power, with message / attack. */
 export function PirateProfile({ player, isMe, live, onClose, onMessage, onAttack }: { player: Player; live?: boolean; isMe: boolean; onClose: () => void; onMessage: () => void; onAttack: () => void }) {
   const world = SEA_WORLDS[hashSeed(player.id) % SEA_WORLDS.length]!;
-  const online = !!live || isOnline(player.last_seen);
+  const online = !!live;
   return (
     <div className="daily-overlay" role="dialog" aria-modal="true" aria-label={`ملف ${player.name}`} onClick={onClose} dir="rtl" style={{ pointerEvents: "auto" }}>
       <div className="daily-panel pp-panel" onClick={(e) => e.stopPropagation()}>
@@ -23,7 +23,7 @@ export function PirateProfile({ player, isMe, live, onClose, onMessage, onAttack
         <header className="daily-head pp-head">
           <span className="daily-kicker">سجل القراصنة</span>
           <h2 className="daily-title">{player.name}</h2>
-          <span className={online ? "pp-status on" : "pp-status"}>{online ? "في البحر الآن" : "غائب — طلب القتال يذهب لقبطانه الآلي"}</span>
+          <span className={online ? "pp-status on" : "pp-status"}>{online ? "في البحر الآن" : "غير متصل الآن — لا يمكن تحديه"}</span>
         </header>
         <dl className="pp-stats">
           <div><dt>القوة</dt><dd>{powerOf(player).toLocaleString("ar")}</dd></div>
