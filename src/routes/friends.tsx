@@ -64,7 +64,7 @@ function FriendsBoard({ me }: { me: Player }) {
     const list = (links ?? []) as Friendship[];
     const ids = [...new Set(list.map((l) => (l.requester_id === me.id ? l.addressee_id : l.requester_id)))];
     const { data: rows } = ids.length
-      ? await supabase.from("players").select("*").in("id", ids)
+      ? await supabase.from("player_public_profiles").select("*").in("id", ids)
       : { data: [] as Player[] };
     const map = Object.fromEntries(((rows ?? []) as Player[]).map((p) => [p.id, p]));
 
@@ -99,7 +99,7 @@ function FriendsBoard({ me }: { me: Player }) {
     if (q.length < 2) return setResults([]);
     setBusy(true);
     const { data } = await supabase
-      .from("players")
+      .from("player_public_profiles")
       .select("*")
       .ilike("name", `%${q}%`)
       .neq("id", me.id)

@@ -152,7 +152,21 @@ export type Database = {
             foreignKeyName: "friendships_addressee_id_fkey"
             columns: ["addressee_id"]
             isOneToOne: false
+            referencedRelation: "player_public_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "friendships_addressee_id_fkey"
+            columns: ["addressee_id"]
+            isOneToOne: false
             referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "friendships_requester_id_fkey"
+            columns: ["requester_id"]
+            isOneToOne: false
+            referencedRelation: "player_public_profiles"
             referencedColumns: ["id"]
           },
           {
@@ -191,7 +205,21 @@ export type Database = {
             foreignKeyName: "messages_recipient_id_fkey"
             columns: ["recipient_id"]
             isOneToOne: false
+            referencedRelation: "player_public_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "messages_recipient_id_fkey"
+            columns: ["recipient_id"]
+            isOneToOne: false
             referencedRelation: "players"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "messages_sender_id_fkey"
+            columns: ["sender_id"]
+            isOneToOne: false
+            referencedRelation: "player_public_profiles"
             referencedColumns: ["id"]
           },
           {
@@ -299,6 +327,13 @@ export type Database = {
             foreignKeyName: "tribe_members_player_id_fkey"
             columns: ["player_id"]
             isOneToOne: true
+            referencedRelation: "player_public_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tribe_members_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: true
             referencedRelation: "players"
             referencedColumns: ["id"]
           },
@@ -328,6 +363,13 @@ export type Database = {
           quest_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "tribe_quest_claims_player_id_fkey"
+            columns: ["player_id"]
+            isOneToOne: false
+            referencedRelation: "player_public_profiles"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "tribe_quest_claims_player_id_fkey"
             columns: ["player_id"]
@@ -370,6 +412,13 @@ export type Database = {
             foreignKeyName: "tribes_owner_id_fkey"
             columns: ["owner_id"]
             isOneToOne: false
+            referencedRelation: "player_public_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tribes_owner_id_fkey"
+            columns: ["owner_id"]
+            isOneToOne: false
             referencedRelation: "players"
             referencedColumns: ["id"]
           },
@@ -395,9 +444,42 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      player_public_profiles: {
+        Row: {
+          avatar_index: number | null
+          avatar_url: string | null
+          created_at: string | null
+          id: string | null
+          last_seen: string | null
+          name: string | null
+          score: number | null
+          theme_id: string | null
+        }
+        Insert: {
+          avatar_index?: number | null
+          avatar_url?: string | null
+          created_at?: string | null
+          id?: string | null
+          last_seen?: string | null
+          name?: string | null
+          score?: number | null
+          theme_id?: string | null
+        }
+        Update: {
+          avatar_index?: number | null
+          avatar_url?: string | null
+          created_at?: string | null
+          id?: string | null
+          last_seen?: string | null
+          name?: string | null
+          score?: number | null
+          theme_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
+      can_view_tribe_members: { Args: { _tribe_id: string }; Returns: boolean }
       claim_tribe_quest: {
         Args: { _player_id: string; _quest_id: string }
         Returns: number

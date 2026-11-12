@@ -46,7 +46,7 @@ export function clearPlayer() {
 
 /** Fetch the stored player (or null when the row disappeared). */
 export async function fetchPlayer(id: string): Promise<Player | null> {
-  const { data } = await supabase.from("players").select("*").eq("id", id).maybeSingle();
+  const { data } = await supabase.from("player_public_profiles").select("*").eq("id", id).maybeSingle();
   return (data as Player) ?? null;
 }
 

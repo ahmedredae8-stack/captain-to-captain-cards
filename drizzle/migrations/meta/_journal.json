@@ -15,6 +15,20 @@
       "when": 1794471370409,
       "tag": "0001_bootstrap_first_admin",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794471964603,
+      "tag": "0002_restrict_player_tribe_and_artwork_reads",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794472077413,
+      "tag": "0003_bind_artwork_reads_to_owner_or_publication",
+      "breakpoints": true
     }
   ]
 }

@@ -54,10 +54,22 @@ export async function myMembership(playerId: string): Promise<TribeMember | null
 export async function listMembers(tribeId: string): Promise<MemberRow[]> {
   const { data } = await supabase
     .from("tribe_members")
-    .select("*, players(name, avatar_index)")
+    .select("*")
     .eq("tribe_id", tribeId)
     .order("contribution", { ascending: false });
-  return (data as unknown as MemberRow[]) ?? [];
+  const members = data ?? [];
+  if (!members.length) return [];
+  const { data: profiles } = await supabase
+    .from("player_public_profiles")
+    .select("id,name,avatar_index")
+    .in("id", members.map((member) => member.player_id));
+  const byId = new Map((profiles ?? []).map((profile) => [profile.id, profile]));
+  return members.map((member) => ({
+    ...member,
+    players: byId.get(member.player_id)
+      ? { name: byId.get(member.player_id)!.name ?? "", avatar_index: byId.get(member.player_id)!.avatar_index ?? 0 }
+      : null,
+  })) as MemberRow[];
 }
 
 export async function createTribe(playerId: string, name: string, emblem: string, motto: string) {

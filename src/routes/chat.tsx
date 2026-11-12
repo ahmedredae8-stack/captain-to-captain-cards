@@ -80,7 +80,7 @@ function ChatRoom({ me }: { me: Player }) {
     const ids = (links ?? []).map((l) => (l.requester_id === me.id ? l.addressee_id : l.requester_id));
     if (!ids.length) return setFriends([]);
 
-    const { data: rows } = await supabase.from("players").select("*").in("id", ids);
+    const { data: rows } = await supabase.from("player_public_profiles").select("*").in("id", ids);
     const list = (rows ?? []) as Player[];
     setFriends(list);
     setPeople((p) => ({ ...p, ...Object.fromEntries(list.map((r) => [r.id, r])) }));
@@ -127,7 +127,7 @@ function ChatRoom({ me }: { me: Player }) {
     async (ids: string[]) => {
       const missing = [...new Set(ids)].filter((id) => !people[id]);
       if (!missing.length) return;
-      const { data } = await supabase.from("players").select("*").in("id", missing);
+      const { data } = await supabase.from("player_public_profiles").select("*").in("id", missing);
       const rows = (data ?? []) as Player[];
       if (rows.length) setPeople((p) => ({ ...p, ...Object.fromEntries(rows.map((r) => [r.id, r])) }));
     },
