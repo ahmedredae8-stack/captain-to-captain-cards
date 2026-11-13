@@ -87,6 +87,7 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
   const queueingRef = useRef(queueing);
   queueingRef.current = queueing;
   const pending = useRef<{ matchId: string; resolve: (v: ChallengeResult) => void; timer: number; attempts: number } | null>(null);
+  const handledChallenges = useRef(new Set<string>());
 
   useEffect(() => {
     if (!me) return;
@@ -106,7 +107,7 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
 
     chan.on("broadcast", { event: "challenge" }, ({ payload }) => {
       const p = payload as { to: string; from: LobbyMeta; matchId: string };
-      if (p.to !== me.id || p.from?.id === me.id) return;
+      if (p.to !== me.id || p.from?.id === me.id || handledChallenges.current.has(p.matchId)) return;
       if (blockedIds().includes(p.from.id)) {
         void chan.send({ type: "broadcast", event: "decline", payload: { to: p.from.id, matchId: p.matchId, blocked: true } });
         return;
@@ -204,6 +205,7 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
     const r: Reply = reply === true ? "accept" : reply === false ? "decline" : reply;
     const chan = chanRef.current;
     setIncoming(null);
+    handledChallenges.current.add(c.matchId);
     if (r === "block") blockCaptain(c.from.id);
     if (!chan) return null;
     const accept = r === "accept";
