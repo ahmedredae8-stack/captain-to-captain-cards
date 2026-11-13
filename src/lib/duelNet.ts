@@ -1,5 +1,5 @@
 /**
- * Live 1v1 duels over Supabase Realtime (public channels, publishable key only — no DB writes).
+ * Live 1v1 duels over Lovable Cloud Realtime (public channels, publishable key only — no DB writes).
  *
  * Layers:
  *  1. Lobby channel `duel-lobby`: presence shows which captains are online; broadcast carries
