@@ -111,7 +111,7 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
         void chan.send({ type: "broadcast", event: "decline", payload: { to: p.from.id, matchId: p.matchId, blocked: true } });
         return;
       }
-      setIncoming((prev) => (prev && prev.until > Date.now() && prev.from.id === p.from.id ? prev : { matchId: p.matchId, from: p.from, until: Date.now() + CHALLENGE_TTL }));
+      setIncoming((prev) => (prev && prev.until > Date.now() && prev.matchId === p.matchId ? prev : { matchId: p.matchId, from: p.from, until: Date.now() + CHALLENGE_TTL }));
     });
 
     chan.on("broadcast", { event: "accept" }, ({ payload }) => {
@@ -304,10 +304,6 @@ export class DuelSession {
         window.setTimeout(() => this.publish(event), 350);
       }
     });
-    if (this.foeSeen && !foes.length && Date.now() - this.lastSeen > 9_000 && !this.notified) {
-      this.notified = true;
-      this.onFoeGone();
-    }
   }
 
   close(): void {
