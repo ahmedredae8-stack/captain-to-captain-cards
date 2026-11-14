@@ -64,6 +64,7 @@
     "lucide-react": "^0.575.0",
     "motion": "^14.7.1",
     "nanoid": "^6.0.2",
+    "photon-realtime": "^4.4.0",
     "playroomkit": "0.0.97",
     "react": "^19.2.0",
     "react-day-picker": "^9.14.0",
@@ -83,7 +84,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",
-    "@lovable.dev/vite-tanstack-config": "2.26.5",
+    "@lovable.dev/vite-tanstack-config": "2.27.1",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.0.0",
     "@types/node": "^22.16.5",

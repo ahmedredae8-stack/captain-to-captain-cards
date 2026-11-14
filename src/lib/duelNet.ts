@@ -23,6 +23,7 @@ export type LobbyMeta = {
   avatar_url?: string | null | undefined;
   score?: number | undefined;
   waiting: boolean;
+  where?: string | undefined;
   ts: number;
 };
 
@@ -36,7 +37,8 @@ export type DuelWire =
   | { t: "move"; side: Side; ship: number; spot: number }
   | { t: "leave" };
 
-export const metaOf = (p: Player, waiting: boolean): LobbyMeta => ({
+export const metaOf = (p: Player, waiting: boolean, where?: string): LobbyMeta => ({
+  where,
   id: p.id,
   name: p.name,
   avatar_index: p.avatar_index,
@@ -77,7 +79,9 @@ export const blockCaptain = (id: string) => {
 export type ChallengeResult = { matchId: string } | "declined" | "timeout" | "ai" | "blocked";
 export type Reply = "accept" | "decline" | "block" | "ai";
 
-export function useDuelLobby(me: Player | null, queueing: boolean) {
+export function useDuelLobby(me: Player | null, queueing: boolean, where?: string) {
+  const whereRef = useRef(where);
+  whereRef.current = where;
   const [others, setOthers] = useState<LobbyMeta[]>([]);
   const [incoming, setIncoming] = useState<Challenge | null>(null);
   const [outgoing, setOutgoing] = useState<{ matchId: string; to: LobbyMeta } | null>(null);
@@ -88,13 +92,14 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
   queueingRef.current = queueing;
   const pending = useRef<{ matchId: string; resolve: (v: ChallengeResult) => void; timer: number; attempts: number } | null>(null);
   const handledChallenges = useRef(new Set<string>());
+  const readRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!me) return;
     const chan = supabase.channel(LOBBY, { config: { presence: { key: me.id } } });
     chanRef.current = chan;
 
-    chan.on("presence", { event: "sync" }, () => {
+    const readPresence = () => {
       const state = chan.presenceState() as Record<string, LobbyMeta[]>;
       const list: LobbyMeta[] = [];
       for (const [key, arr] of Object.entries(state)) {
@@ -103,7 +108,9 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
         if (m?.id && m.name) list.push(m);
       }
       setOthers(list);
-    });
+    };
+    readRef.current = readPresence;
+    chan.on("presence", { event: "sync" }, readPresence);
 
     chan.on("broadcast", { event: "challenge" }, ({ payload }) => {
       const p = payload as { to: string; from: LobbyMeta; matchId: string };
@@ -141,19 +148,19 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
 
     void chan.subscribe((status) => {
       if (status === "SUBSCRIBED" && meRef.current) {
-        void chan.track(metaOf(meRef.current, queueingRef.current));
+        void chan.track(metaOf(meRef.current, queueingRef.current, whereRef.current));
       }
     });
 
     const tick = window.setInterval(() => {
       setIncoming((c) => (c && c.until < Date.now() ? null : c));
-      if (!document.hidden && meRef.current) void chan.track(metaOf(meRef.current, queueingRef.current));
+      if (!document.hidden && meRef.current) void chan.track(metaOf(meRef.current, queueingRef.current, whereRef.current));
     }, 5_000);
 
     // Leave the online list the moment the game is hidden or closed; rejoin when it's back.
     const onVis = () => {
       if (document.hidden) void chan.untrack();
-      else if (meRef.current) void chan.track(metaOf(meRef.current, queueingRef.current));
+      else if (meRef.current) void chan.track(metaOf(meRef.current, queueingRef.current, whereRef.current));
     };
     const onLeave = () => { void chan.untrack(); };
     document.addEventListener("visibilitychange", onVis);
@@ -174,9 +181,17 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
   /** Announce (or withdraw) my "looking for a duel" state. */
   useEffect(() => {
     const chan = chanRef.current;
-    if (chan && me && chan.presenceState()) void chan.track(metaOf(me, queueing));
+    if (chan && me && chan.presenceState()) void chan.track(metaOf(me, queueing, whereRef.current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queueing]);
+  }, [queueing, where]);
+
+  /** Manual refresh: re-announce myself and re-read who is connected right now. */
+  const refresh = async () => {
+    const chan = chanRef.current, m = meRef.current;
+    if (!chan || !m) return;
+    await chan.track(metaOf(m, queueingRef.current, whereRef.current));
+    readRef.current?.();
+  };
 
   /** Challenge a captain; resolves with the matchId when they accept, else declined/timeout. */
   const challenge = (peer: LobbyMeta) =>
@@ -194,7 +209,7 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
         const pend = pending.current;
         if (!pend || pend.matchId !== matchId || !chanRef.current) return;
         pend.attempts += 1;
-        void chan.send({ type: "broadcast", event: "challenge", payload: { to: peer.id, from: metaOf(m, queueingRef.current), matchId, ts: Date.now() } });
+        void chan.send({ type: "broadcast", event: "challenge", payload: { to: peer.id, from: metaOf(m, queueingRef.current, whereRef.current), matchId, ts: Date.now() } });
         if (pend.attempts < 8) window.setTimeout(send, 1_200);
       };
       send();
@@ -224,7 +239,7 @@ export function useDuelLobby(me: Player | null, queueing: boolean) {
     setOutgoing(null);
   };
 
-  return { others, incoming, outgoing, challenge, respond, cancelOutgoing };
+  return { others, incoming, outgoing, challenge, respond, cancelOutgoing, refresh };
 }
 
 /** Live battle events travel through a dedicated Realtime channel for this accepted match. */

@@ -31,7 +31,7 @@ import { PirateProfile } from "@/components/battle/PirateProfile";
 import { BattleScreen } from "@/components/battle/BattleScreen";
 import { KingOfSeasButton, prepareGame } from "@/components/royale/KingOfSeas";
 import { KingOfSeas } from "@/components/royale/PlayroomKingOfSeas";
-import { useDuelLobby } from "@/lib/duelNet";
+import { useDuelHub } from "@/components/DuelHub";
 import { touchPresence } from "@/lib/player";
 import { DuelRequests } from "@/components/DuelRequests";
 import { isDecoy } from "@/components/LiveDuels";
@@ -91,7 +91,9 @@ function Index() {
   const [duel, setDuel] = useState<{ matchId: string; role: "host" | "guest" } | null>(null);
   // An empty matchId means the foe handed the duel to their AI captain: fight offline against a bot copy.
   const startDuel = (f: import("@/lib/player").Player, matchId: string, role: "host" | "guest") => { setWin(null); setProfile(null); setDuel(matchId ? { matchId, role } : null); setFoe(f); };
-  const lobby = useDuelLobby(player, true);
+  const { lobby, pending, clearPending } = useDuelHub();
+  // A challenge accepted on any page lands here and opens the battle.
+  useEffect(() => { if (pending) { startDuel(pending.foe, pending.matchId, pending.role); clearPending(); } }, [pending]);
   // Heartbeat: keeps "last seen" fresh so other captains see this one as online.
   useEffect(() => {
     if (!player?.id) return;
@@ -258,11 +260,11 @@ function Index() {
       )}
       {win === "stats" && <GameWindow title="سجل القباطنة" size="lg" onClose={() => setWin(null)}><RankingsWindow me={player} online={lobby.others} onPick={(p) => { setWin(null); setProfile(p); }} /></GameWindow>}
       {profile && !foe && <PirateProfile player={profile} live={lobby.others.some((o) => o.id === profile.id)} isMe={profile.id === player?.id} onClose={() => setProfile(null)} onMessage={() => { if (isDecoy(profile.id)) { setDuelNotice(`${profile.name} في وسط معركة الآن — جرّب مراسلته لاحقاً`); setProfile(null); return; } setChatPeer(profile); setProfile(null); setWin("chat"); }} onAttack={() => { void attack(profile); }} />}
-      <DuelRequests incoming={lobby.incoming} outgoing={lobby.outgoing} notice={duelNotice} onCancel={lobby.cancelOutgoing} onDismiss={() => setDuelNotice(null)} onAnswer={(c, r) => { playSfx("click", 0.7); const m = lobby.respond(c, r); if (m) startDuel(m.foe, m.matchId, m.role); }} />
+      <DuelRequests incoming={null} outgoing={null} notice={duelNotice} onCancel={lobby.cancelOutgoing} onDismiss={() => setDuelNotice(null)} onAnswer={() => undefined} />
       {foe && player && <BattleScreen me={player} foe={foe} {...(duel ? { online: duel } : {})} onClose={() => { setFoe(null); setDuel(null); setProfile(null); }} />}
       {win === "bag" && <GameWindow title="مخزن العتاد" size="lg" onClose={() => setWin(null)}><InventoryWindow player={player} /></GameWindow>}
       {win === "alerts" && <GameWindow title="التنبيهات" size="lg" onClose={() => setWin(null)}><AlertsWindow /></GameWindow>}
-      {win === "enemies" && <GameWindow title="البحث عن القراصنة" hint="ابحث عن قرصان واضغط لعرض ملفه" size="lg" onClose={() => setWin(null)}><RankingsWindow me={player} online={lobby.others} initial="events" onPick={(p) => { setWin(null); setProfile(p); }} /></GameWindow>}
+      {win === "enemies" && <GameWindow title="البحث عن القراصنة" hint="ابحث عن قرصان واضغط لعرض ملفه" size="lg" onClose={() => setWin(null)}><RankingsWindow me={player} online={lobby.others} onRefresh={lobby.refresh} initial="events" onPick={(p) => { setWin(null); setProfile(p); }} /></GameWindow>}
        {win === "tribe" && <GameWindow title="القبيلة" size="xl" onClose={() => setWin(null)}><TribesPage /></GameWindow>}
       {win === "settings" && (
         <GameWindow title="الإعدادات" size="md" onClose={() => setWin(null)}>
