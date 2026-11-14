@@ -1,56 +1,76 @@
 import { useEffect, useMemo, useState } from "react";
-import { Swords, Users } from "lucide-react";
+import { RefreshCw, Swords, Users } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { playerFromMeta, type LobbyMeta } from "@/lib/duelNet";
 import { CaptainAvatar } from "@/components/GameSprite";
+import { placeLabel } from "@/components/DuelHub";
 import type { Player } from "@/lib/player";
 
 export const isDecoy = (id: string) => id.startsWith("decoy-");
 
-/** Every captain: live ones first, then the two active AI captains, then everyone else. Tap opens their dossier. */
-export function LiveDuels({ me, online, onPick }: { me: Player | null; online: LobbyMeta[]; onPick: (p: Player) => void }) {
+/** Pirate finder: captains with a live connection (on any page) first, then everyone else. */
+export function LiveDuels({ me, online, onPick, onRefresh }: { me: Player | null; online: LobbyMeta[]; onPick: (p: Player) => void; onRefresh?: (() => Promise<void>) | undefined }) {
   const [all, setAll] = useState<Player[]>([]);
+  const [spinning, setSpinning] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    void supabase.from("player_public_profiles").select("*").order("last_seen", { ascending: false }).limit(200).then(({ data }) => { if (alive) setAll((data ?? []) as Player[]); });
-    return () => { alive = false; };
-  }, []);
+  const load = () => supabase.from("player_public_profiles").select("*").order("last_seen", { ascending: false }).limit(200).then(({ data }) => setAll((data ?? []) as Player[]));
+  useEffect(() => { void load(); }, []);
 
-  const rows = useMemo(() => {
+  const refresh = async () => {
+    setSpinning(true);
+    await Promise.all([onRefresh?.(), load(), new Promise((r) => setTimeout(r, 700))]);
+    setSpinning(false);
+  };
+
+  const { live, away } = useMemo(() => {
     const liveIds = new Set(online.map((o) => o.id));
-    const live = online.filter((o) => o.id !== me?.id).map((o) => ({ p: playerFromMeta(o), tag: "live" as const }));
-    // Only captains whose game is open right now (live connection) count as online.
-    const rest = all.filter((p) => p.id !== me?.id && !liveIds.has(p.id)).map((p) => ({ p, tag: "away" as const }));
-    return [...live, ...rest];
+    return {
+      live: online.filter((o) => o.id !== me?.id),
+      away: all.filter((p) => p.id !== me?.id && !liveIds.has(p.id)),
+    };
   }, [online, all, me?.id]);
 
-  const label = { live: "متصل الآن", away: "غير متصل" };
-
   return (
-    <div className="duel-live">
-      <div className="duel-live-head">
-        <div className="duel-live-note">
-          <strong>كل القباطنة</strong>
-          <span>اضغط على أي قبطان لتختار هجوم أو مراسلة — القتال يبدأ فقط إذا وافق القبطان المتصل</span>
+    <div className="duel-live" dir="rtl">
+      <div className="pf-head">
+        <div>
+          <strong>البحث عن قرصان</strong>
+          <span>المتصلون الآن: <b className="pf-count">{live.length}</b> — القتال يبدأ فقط بموافقة القبطان</span>
         </div>
+        <button type="button" className="tos-btn pf-refresh" onClick={() => void refresh()} disabled={spinning}>
+          <RefreshCw className={`h-4 w-4 ${spinning ? "spin" : ""}`} /> {spinning ? "جارٍ البحث…" : "تحديث"}
+        </button>
       </div>
-      {rows.length ? (
-        <ol className="ranking-list">
-          {rows.map(({ p, tag }) => (
-            <li key={p.id}>
-              <button type="button" className="pirate-row" onClick={() => onPick(p)}>
-                <CaptainAvatar seed={p.avatar_index ?? 0} url={p.avatar_url} className="ranking-avatar" />
-                <strong>{p.name}</strong>
-                <em className={tag === "live" ? "duel-waiting" : "duel-away"}>{label[tag]}</em>
-                <span><Swords className="h-3.5 w-3.5" /> اختر</span>
-              </button>
-            </li>
+      <div className="pf-section">متصلون الآن</div>
+      {live.length ? (
+        <div className="pf-grid">
+          {live.map((m) => (
+            <button key={m.id} type="button" className="pf-card live" onClick={() => onPick(playerFromMeta(m))}>
+              <i className="pf-dot" />
+              <CaptainAvatar seed={m.avatar_index ?? 0} url={m.avatar_url} className="pf-av" />
+              <b>{m.name}</b>
+              <small>{placeLabel(m.where)} · {m.score ?? 0} مجد</small>
+              <span className="pf-cta"><Swords className="h-3 w-3" /> تحدَّ</span>
+            </button>
           ))}
-        </ol>
+        </div>
       ) : (
-        <div className="dock-empty"><Users size={40} strokeWidth={1.4} /><strong>جارٍ تحميل القباطنة…</strong></div>
+        <div className="dock-empty"><Users size={36} strokeWidth={1.4} /><strong>لا يوجد قراصنة متصلون الآن</strong><span>اضغط تحديث بعد قليل</span></div>
       )}
+      {away.length > 0 && <>
+        <div className="pf-section">غير متصلين</div>
+        <div className="pf-grid">
+          {away.map((p) => (
+            <button key={p.id} type="button" className="pf-card" onClick={() => onPick(p)}>
+              <i className="pf-dot" />
+              <CaptainAvatar seed={p.avatar_index ?? 0} url={p.avatar_url} className="pf-av" />
+              <b>{p.name}</b>
+              <small>غير متصل</small>
+              <span className="pf-cta">الملف</span>
+            </button>
+          ))}
+        </div>
+      </>}
     </div>
   );
 }
