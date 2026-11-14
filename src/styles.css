@@ -3263,3 +3263,62 @@
 .duel-replies .duel-no,.duel-replies .duel-block{filter:saturate(.4) brightness(.85)}
 .duel-requests{position:fixed;z-index:190;top:max(10px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);width:min(560px,94vw);display:flex;flex-direction:column;gap:8px;pointer-events:auto}
 .duel-away{font-style:normal;font-size:11px;opacity:.6}
+
+/* ── Global duel invite (treasury style) ── */
+.duel-invite { z-index: 260; }
+.duel-invite-panel { text-align: center; animation: duel-invite-in .35s cubic-bezier(.2,1.4,.4,1); }
+@keyframes duel-invite-in { from { transform: scale(.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.duel-invite-foe { display: flex; flex-direction: column; align-items: center; gap: .25rem; margin-bottom: .8rem; }
+.duel-invite-avatar { width: 5rem; height: 5rem; border-radius: 50%; border: 2px solid var(--tos-gold); box-shadow: 0 0 24px color-mix(in oklab, var(--tos-gold) 45%, transparent); }
+.duel-invite-foe b { font-family: var(--tos-display); font-size: 1.3rem; color: var(--tos-gold); }
+.duel-invite-foe span { font-size: .75rem; color: var(--tos-subtle); }
+.duel-invite-timer { position: relative; height: 1.3rem; margin-bottom: .8rem; border-radius: 1rem; overflow: hidden; background: var(--tos-card); border: 1px solid var(--tos-line); }
+.duel-invite-timer i { position: absolute; inset-block: 0; inset-inline-start: 0; background: linear-gradient(90deg, var(--tos-gold-deep), var(--tos-gold)); transition: width .5s linear; }
+.duel-invite-timer small { position: relative; font-size: .7rem; font-weight: 800; color: var(--tos-text); line-height: 1.3rem; }
+.duel-invite-panel .daily-claim { width: 100%; display: inline-flex; justify-content: center; gap: .4rem; }
+.duel-invite-row { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem; margin-top: .5rem; }
+.duel-invite-ghost { display: inline-flex; justify-content: center; gap: .3rem; filter: saturate(.3) brightness(.8); font-size: .8rem; }
+
+/* ── Pirate finder ── */
+.pf-head { display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin-bottom: .7rem; padding: .7rem .8rem; border-radius: 1.2rem; background: radial-gradient(90% 80% at 50% 0%, color-mix(in oklab, var(--tos-aqua) 20%, transparent), transparent 70%), var(--tos-card); border: 1px solid var(--tos-line); }
+.pf-head strong { display: block; font-family: var(--tos-display); font-size: 1.15rem; color: var(--tos-gold); }
+.pf-head span { font-size: .7rem; color: var(--tos-subtle); }
+.pf-count { font-family: var(--tos-display); color: var(--tos-aqua); }
+.pf-refresh { display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap; font-size: .8rem; }
+.pf-refresh .spin { animation: pf-spin .8s linear infinite; }
+@keyframes pf-spin { to { transform: rotate(360deg); } }
+.pf-section { margin: .6rem .2rem .35rem; font-size: .68rem; font-weight: 800; letter-spacing: .12em; color: var(--tos-aqua); }
+.pf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: .5rem; }
+.pf-card { position: relative; display: flex; flex-direction: column; align-items: center; gap: .2rem; padding: .8rem .4rem .6rem; border-radius: 1.1rem; background: var(--tos-card); border: 1px solid var(--tos-line); color: var(--tos-text); cursor: pointer; transition: transform .15s; }
+.pf-card:hover { transform: translateY(-2px); }
+.pf-card.live { border-color: var(--tos-gold); box-shadow: 0 0 18px color-mix(in oklab, var(--tos-gold) 30%, transparent); }
+.pf-card .pf-av { width: 3.4rem; height: 3.4rem; border-radius: 50%; border: 2px solid var(--tos-line); }
+.pf-card.live .pf-av { border-color: var(--tos-gold); }
+.pf-card b { font-size: .85rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-card small { font-size: .65rem; color: var(--tos-subtle); }
+.pf-dot { position: absolute; top: .5rem; inset-inline-end: .55rem; width: .6rem; height: .6rem; border-radius: 50%; background: var(--tos-subtle); opacity: .5; }
+.pf-card.live .pf-dot { background: var(--tos-lime, var(--tos-aqua)); opacity: 1; box-shadow: 0 0 10px var(--tos-lime, var(--tos-aqua)); animation: duel-pulse 1.2s ease-in-out infinite; }
+.pf-cta { margin-top: .25rem; display: inline-flex; gap: .25rem; align-items: center; padding: .2rem .6rem; border-radius: .7rem; font-size: .7rem; font-weight: 800; background: var(--tos-btn-face); color: var(--tos-abyss); }
+.pf-card:not(.live) .pf-cta { background: var(--tos-panel-hi); color: var(--tos-subtle); }
+
+/* ── King of the Seas lobby (treasury style) ── */
+.kq-wrap { position: relative; width: min(100%, 34rem); max-height: 100%; overflow: auto; padding: 1.1rem; }
+.kq-intro { text-align: center; animation: duel-invite-in .6s ease-out; }
+.kq-intro img { width: 7rem; margin: 0 auto -.6rem; filter: drop-shadow(0 0 20px color-mix(in oklab, var(--tos-gold) 60%, transparent)); }
+.kq-phases { display: grid; grid-template-columns: repeat(3, 1fr); gap: .4rem; margin: .7rem 0; }
+.kq-phases li { list-style: none; padding: .55rem .3rem; border-radius: .9rem; background: var(--tos-card); border: 1px solid var(--tos-line); text-align: center; }
+.kq-phases li small { display: block; font-family: var(--tos-display); color: var(--tos-gold); font-size: .95rem; }
+.kq-phases li span { font-size: .65rem; color: var(--tos-subtle); }
+.kq-seats { display: grid; grid-template-columns: repeat(3, 1fr); gap: .45rem; margin: .5rem 0 .8rem; }
+.kq-seat { display: flex; flex-direction: column; align-items: center; gap: .15rem; min-height: 6rem; justify-content: center; padding: .5rem .2rem; border-radius: 1rem; background: var(--tos-card); border: 1px dashed var(--tos-line); }
+.kq-seat.on { border-style: solid; border-color: var(--tos-gold); }
+.kq-seat.ready { box-shadow: 0 0 16px color-mix(in oklab, var(--tos-lime, var(--tos-aqua)) 45%, transparent); }
+.kq-seat .pf-av { width: 2.8rem; height: 2.8rem; border-radius: 50%; border: 2px solid var(--tos-gold); }
+.kq-seat b { font-size: .75rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kq-seat small { font-size: .62rem; color: var(--tos-subtle); }
+.kq-seat.ready small { color: var(--tos-lime, var(--tos-aqua)); font-weight: 800; }
+.kq-seat.empty { opacity: .55; animation: duel-pulse 2.2s ease-in-out infinite; }
+.kq-status { display: flex; justify-content: space-between; align-items: center; font-size: .7rem; color: var(--tos-subtle); margin-bottom: .6rem; }
+.kq-status b { color: var(--tos-aqua); }
+.kq-actions { display: grid; grid-template-columns: 1fr 2fr; gap: .45rem; }
+.kq-actions .tos-btn { justify-content: center; }
