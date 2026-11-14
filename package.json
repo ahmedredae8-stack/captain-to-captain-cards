@@ -64,6 +64,7 @@
     "lucide-react": "^0.575.0",
     "motion": "^14.7.1",
     "nanoid": "^6.0.2",
+    "photon-realtime": "^4.4.0",
     "playroomkit": "0.0.97",
     "react": "^19.2.0",
     "react-day-picker": "^9.14.0",
