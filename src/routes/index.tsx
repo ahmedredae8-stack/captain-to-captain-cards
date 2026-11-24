@@ -11,6 +11,7 @@ import { GameWindow } from "@/components/GameWindow";
 import { TradingFloor } from "@/components/TradingFloor";
 import { TopHud } from "@/components/TopHud";
 import { DailyReward } from "@/components/DailyReward";
+import { PrivateMessageToast } from "@/components/PrivateMessageToast";
 import { QuestBoard } from "@/components/QuestBoard";
 import { CaptainGate } from "@/components/CaptainGate";
 import { SeaStudio, loadStudio, hasSavedStudio, STUDIO_EVENT, type StudioConfig } from "@/components/SeaStudio";
@@ -293,6 +294,7 @@ function Index() {
       )}
 
       {!intro && <DailyReward />}
+      {!intro && <PrivateMessageToast me={player} onOpenChat={(peer) => { setChatPeer(peer); setWin("chat"); }} />}
       {!intro && !loading && !player && <CaptainGate onReady={(p) => { setPlayer(p); void refresh(); }} />}
 
       {intro && <IntroLoader onDone={finishIntro} />}
