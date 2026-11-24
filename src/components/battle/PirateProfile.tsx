@@ -1,624 +1,181 @@
-import { useState, useMemo } from "react";
-import { 
-  X, Swords, Fish, Users, MessageCircle, Ship 
-} from "lucide-react";
+import { useMemo, useState } from "react";
+import { Anchor, Fish, LogOut, MessageCircle, Shield, Swords, Users, X } from "lucide-react";
+import SeaScene from "@/components/SeaScene";
 import { CaptainAvatar } from "@/components/GameSprite";
-import { powerOf } from "@/components/battle/BattleScreen";
 import { fleetCatalog, type FleetShip } from "@/lib/fleetCatalog";
-import { SEA_WORLDS } from "@/lib/seaWorld";
-import { WEAPONS } from "@/game/duel";
-import { CARDS } from "@/components/battle/BattleScreen";
+import { getSeaWorld, SEA_WORLDS } from "@/lib/seaWorld";
 import { CREWS } from "@/lib/items";
+import { WEAPONS } from "@/game/duel";
 import { FISH, saveHaul, type FishId } from "@/lib/catches";
 import { playSfx } from "@/lib/sound";
 import { useLiveShips } from "@/lib/shipOverrides";
 import type { Player } from "@/lib/player";
 
-const hashSeed = (s: string) => {
+const hash = (value: string) => {
   let h = 2166136261;
-  for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  for (const c of value) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
   return h >>> 0;
 };
 
-type EnemyShip = {
-  id: number;
-  ship: FleetShip;
-  name: string;
-  maxHp: number;
-  hp: number;
-  fishCargo: { id: FishId; name: string; qty: number; img: string }[];
-  isSunk: boolean;
-};
+type TargetShip = { id: number; ship: FleetShip; hp: number; maxHp: number; fishId: FishId; fishQty: number; sunk: boolean; x: number; y: number };
+type Modal = "attack" | "plunder" | "support" | null;
 
-type ActionTab = "none" | "plunder" | "attack" | "support";
-
-export function PirateProfile({
-  player,
-  isMe,
-  live,
-  onClose,
-  onMessage,
-  onAttack,
-}: {
-  player: Player;
-  live?: boolean;
-  isMe: boolean;
-  onClose: () => void;
-  onMessage: () => void;
-  onAttack: () => void;
+export function PirateProfile({ player, isMe, live, onClose, onMessage }: {
+  player: Player; live?: boolean; isMe: boolean; onClose: () => void; onMessage: () => void; onAttack?: () => void;
 }) {
-  const seed = useMemo(() => hashSeed(player.id), [player.id]);
-  const world = SEA_WORLDS[seed % SEA_WORLDS.length]!;
+  const seed = useMemo(() => hash(player.id), [player.id]);
+  const world = useMemo(() => player.theme_id ? getSeaWorld(player.theme_id) : SEA_WORLDS[seed % SEA_WORLDS.length]!, [player.theme_id, seed]);
   const myShips = useLiveShips(false);
-  const online = !!live;
-
-  // توليد أسطول سفن الخصم بحمولات أسماك قابلة للنهب
-  const [enemyFleet, setEnemyFleet] = useState<EnemyShip[]>(() => {
-    const list: EnemyShip[] = [];
-    const count = 3;
-    for (let i = 0; i < count; i++) {
-      const shipIndex = (seed + i * 3) % Math.min(fleetCatalog.length, 8);
-      const ship = fleetCatalog[shipIndex] ?? fleetCatalog[0]!;
-      const maxHp = 100 + (ship.data?.tier ?? 1) * 35;
-      
-      const cargoPicks: FishId[] = ["sardine", "mackerel", "tuna"];
-      const fId = cargoPicks[(seed + i) % cargoPicks.length]!;
-      const fishObj = FISH.find((f) => f.id === fId) ?? FISH[0]!;
-      const fishQty = 15 + ((seed * (i + 1)) % 45);
-
-      list.push({
-        id: i,
-        ship,
-        name: ship.name,
-        maxHp,
-        hp: maxHp,
-        fishCargo: [{ id: fId, name: fishObj.name, qty: fishQty, img: fishObj.img }],
-        isSunk: false,
-      });
-    }
-    return list;
+  const [fleet, setFleet] = useState<TargetShip[]>(() => {
+    const points = [{ x: 23, y: 56 }, { x: 51, y: 69 }, { x: 79, y: 54 }];
+    return points.map((p, i) => {
+      const ship = fleetCatalog[(seed + i * 3) % Math.min(fleetCatalog.length, 8)] ?? fleetCatalog[0]!;
+      const fishId = (["sardine", "mackerel", "tuna"] as FishId[])[(seed + i) % 3]!;
+      return { id: i, ship, hp: 150, maxHp: 150, fishId, fishQty: 24 + ((seed * (i + 1)) % 42), sunk: false, ...p };
+    });
   });
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [modal, setModal] = useState<Modal>(null);
+  const [notice, setNotice] = useState("");
+  const [travelling, setTravelling] = useState<{ targetId: number; ship: string } | null>(null);
+  const [projectile, setProjectile] = useState<{ targetId: number; icon: string } | null>(null);
+  const target = fleet.find((s) => s.id === selectedId) ?? null;
 
-  const [selectedShipId, setSelectedShipId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<ActionTab>("none");
-  const [sailingShip, setSailingShip] = useState<string | null>(null);
-  const [plunderNotice, setPlunderNotice] = useState<string | null>(null);
-  const [attackEffect, setAttackEffect] = useState<{ shipId: number; dmg: number } | null>(null);
+  // Select only weapons fitted to the player's ships; remove duplicates.
+  const availableWeapons = useMemo(() => {
+    const ids = [...new Set(myShips.flatMap((s) => s.data.weapons))];
+    return ids.map((id) => ({ id, ...(WEAPONS[id] ?? { name: id, dmg: 20, type: "kinetic" }) }));
+  }, [myShips]);
 
-  const selectedEnemyShip = selectedShipId !== null ? enemyFleet[selectedShipId] : null;
+  const attack = (weaponId: string) => {
+    if (!target) return;
+    const weapon = WEAPONS[weaponId];
+    const dmg = weapon?.dmg ?? 20;
+    const id = target.id;
+    setModal(null);
+    playSfx("click", 0.9);
+    setProjectile({ targetId: id, icon: weapon?.type === "fire" ? "🔥" : weapon?.type === "ice" ? "❄️" : weapon?.type === "pierce" ? "⚡" : "💣" });
+    setNotice(`💥 أصابت ${weapon?.name ?? weaponId} سفينة «${target.ship.name}»!`);
+    window.setTimeout(() => {
+      setProjectile(null);
+      setFleet((items) => items.map((s) => {
+        if (s.id !== id) return s;
+        const hp = Math.max(0, s.hp - dmg);
+        return { ...s, hp, sunk: hp === 0 };
+      }));
+    }, 750);
+  };
 
-  // تنفيذ عملية سرقة السمك
-  const handleStartPlunder = async (myShip: FleetShip) => {
-    if (!selectedEnemyShip || selectedEnemyShip.isSunk) return;
-    
+  const plunder = async (ship: ReturnType<typeof useLiveShips>[number]) => {
+    if (!target) return;
+    const id = target.id;
+    setModal(null);
+    setTravelling({ targetId: id, ship: ship.name });
+    setNotice(`⛵ سفينتك «${ship.name}» تبحر نحو «${target.ship.name}»...`);
     playSfx("waves", 0.7);
-    setSailingShip(myShip.name);
-    setActiveTab("none");
-    setPlunderNotice(`سفينتك «${myShip.name}» تبحر الآن لتقف بجوار «${selectedEnemyShip.name}»...`);
-
-    setTimeout(async () => {
-      playSfx("click", 0.9);
-      const stolenFish = selectedEnemyShip.fishCargo[0];
-      const stolenAmount = Math.max(5, Math.floor((stolenFish?.qty ?? 20) * 0.45));
-
-      if (stolenFish && stolenAmount > 0) {
-        // حفظ الصيد المسروق في مخزن اللاعب
-        await saveHaul([{ id: stolenFish.id, qty: stolenAmount }]);
-
-        // خصم السمك من سفينة الخصم
-        setEnemyFleet((prev) =>
-          prev.map((s) => {
-            if (s.id !== selectedEnemyShip.id) return s;
-            return {
-              ...s,
-              fishCargo: s.fishCargo.map((c) => ({
-                ...c,
-                qty: Math.max(0, c.qty - stolenAmount),
-              })),
-            };
-          })
-        );
-
-        setPlunderNotice(
-          `⚔️ تمت الغارة بنجاح! قامت «${myShip.name}» بنهب ${stolenAmount} من سمك ${stolenFish.name} ونقلها إلى مخزنك!`
-        );
-      } else {
-        setPlunderNotice(`تمت المناورة ولم يتم العثور على حمولة إضافية.`);
+    window.setTimeout(async () => {
+      const current = fleet.find((s) => s.id === id);
+      if (!current || current.sunk || current.fishQty <= 0) {
+        setNotice("لم تعد هناك حمولة سمك قابلة للنهب.");
+        setTravelling(null);
+        return;
       }
-
-      setSailingShip(null);
-    }, 1800);
+      const qty = Math.min(current.fishQty, Math.max(1, Math.floor(current.fishQty * 0.4)));
+      await saveHaul([{ id: current.fishId, qty }]);
+      setFleet((items) => items.map((s) => s.id === id ? { ...s, fishQty: Math.max(0, s.fishQty - qty) } : s));
+      setNotice(`🏴‍☠️ وصلت «${ship.name}» بجوار السفينة ونهبت ${qty} من ${FISH.find((f) => f.id === current.fishId)?.name ?? "السمك"}.`);
+      window.setTimeout(() => setTravelling(null), 1200);
+    }, 1900);
   };
 
-  // تنفيذ الهجوم بسلاح محدد
-  const handleAttackWithWeapon = (weaponId: string) => {
-    if (!selectedEnemyShip || selectedEnemyShip.isSunk) return;
-
-    playSfx("click", 1);
-    const weaponData = WEAPONS[weaponId];
-    const dmg = weaponData?.dmg ?? 30;
-
-    setAttackEffect({ shipId: selectedEnemyShip.id, dmg });
-
-    setTimeout(() => {
-      setAttackEffect(null);
-      setEnemyFleet((prev) =>
-        prev.map((s) => {
-          if (s.id !== selectedEnemyShip.id) return s;
-          const nextHp = Math.max(0, s.hp - dmg);
-          return {
-            ...s,
-            hp: nextHp,
-            isSunk: nextHp === 0,
-          };
-        })
-      );
-
-      if (selectedEnemyShip.hp - dmg <= 0) {
-        setPlunderNotice(`💥 ضربة مدمرة! تم إغراق «${selectedEnemyShip.name}» بنجاح!`);
-        setActiveTab("none");
-      }
-    }, 700);
-  };
-
-  // دعم السفينة بالطواقم
-  const handleSupportCrew = (crewId: string) => {
-    if (!selectedEnemyShip) return;
+  const support = (crewName: string) => {
+    if (!target) return;
+    const id = target.id;
+    setModal(null);
+    setFleet((items) => items.map((s) => s.id === id ? { ...s, hp: Math.min(s.maxHp, s.hp + 35), sunk: false } : s));
+    setNotice(`🛡️ وصل طاقم «${crewName}» لدعم سفينة «${target.ship.name}».`);
     playSfx("click", 0.8);
-    const crew = CREWS.find((c) => c.id === crewId);
-    setEnemyFleet((prev) =>
-      prev.map((s) => {
-        if (s.id !== selectedEnemyShip.id) return s;
-        return {
-          ...s,
-          hp: Math.min(s.maxHp, s.hp + 40),
-        };
-      })
-    );
-    setPlunderNotice(`🛡️ تم إرسال ${crew?.name ?? "الطاقم"}! تم دعم السفينة وترميم دروعها.`);
-    setActiveTab("none");
   };
 
   return (
-    <div
-      className="daily-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`محيط ${player.name}`}
-      onClick={onClose}
-      dir="rtl"
-      style={{ pointerEvents: "auto", overflowY: "auto", padding: "1.5rem 1rem" }}
-    >
-      <div
-        className="daily-panel pp-panel"
-        style={{ width: "min(100%, 36rem)", margin: "auto" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button type="button" aria-label="إغلاق" onClick={onClose} className="tos-x">
-          <X className="h-4 w-4" />
-        </button>
-
-        {/* رأس النافذة على طراز نافذة المكافأة */}
-        <header className="daily-head" style={{ marginBottom: "0.6rem" }}>
-          <span className="daily-kicker">سجل القراصنة · محيط العدو</span>
-          <h2 className="daily-title" style={{ fontSize: "1.8rem" }}>{player.name}</h2>
-          <div className="daily-streak">
-            <b>{world.name}</b>
-            <span>{online ? "🟢 في البحر الآن" : "⚪ في الميناء (غير متصل)"}</span>
-          </div>
-        </header>
-
-        {/* إحصائيات الأسطول والمجد */}
-        <dl className="pp-stats" style={{ gridTemplateColumns: "repeat(3, 1fr)", margin: "0.5rem 0 0.8rem" }}>
-          <div>
-            <dt>قوة الأسطول</dt>
-            <dd>{powerOf(player).toLocaleString("ar")}</dd>
-          </div>
-          <div>
-            <dt>المجد والنقاط</dt>
-            <dd>{(player.score ?? 0).toLocaleString("ar")}</dd>
-          </div>
-          <div>
-            <dt>سفن راسية</dt>
-            <dd>{enemyFleet.filter((s) => !s.isSunk).length} / {enemyFleet.length}</dd>
-          </div>
-        </dl>
-
-        {/* إشعارات الغارة والنتائج */}
-        {plunderNotice && (
-          <div
-            style={{
-              padding: "0.6rem 0.8rem",
-              marginBottom: "0.8rem",
-              borderRadius: "0.8rem",
-              background: "color-mix(in oklab, var(--tos-aqua, #38bdf8) 18%, black)",
-              border: "1.5px solid var(--tos-gold, #eab308)",
-              color: "#fef08a",
-              fontSize: "0.85rem",
-              textAlign: "center",
-              fontWeight: "bold",
-              animation: "fadeIn 0.3s ease",
-            }}
-          >
-            {plunderNotice}
-          </div>
-        )}
-
-        {/* محاكاة إبحار السفينة نحو الهدف */}
-        {sailingShip && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "0.6rem",
-              padding: "0.6rem",
-              marginBottom: "0.8rem",
-              borderRadius: "0.8rem",
-              background: "linear-gradient(90deg, #1e293b, #0f172a)",
-              border: "1px dashed var(--tos-gold, #eab308)",
-              color: "white",
-              fontSize: "0.85rem",
-            }}
-          >
-            <Ship className="h-5 w-5 animate-bounce" style={{ color: "var(--tos-gold, #eab308)" }} />
-            <span>السفينة <strong>{sailingShip}</strong> تبحر لتقف بمحاذاة سفينة العدو لنهب حمولتها...</span>
-          </div>
-        )}
-
-        {/* مشهد محيط العدو العائم */}
-        <div
-          style={{
-            position: "relative",
-            minHeight: "13rem",
-            borderRadius: "1.2rem",
-            overflow: "hidden",
-            backgroundImage: `url(${world.thumb})`,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            border: "2px solid color-mix(in oklab, var(--tos-gold, #eab308) 50%, transparent)",
-            padding: "1rem 0.6rem",
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "space-between",
-            boxShadow: "inset 0 0 40px rgba(0,0,0,0.8)",
-          }}
-        >
-          {/* صورة القبطان العائمة في البحر */}
-          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", zIndex: 2 }}>
-            <CaptainAvatar
-              seed={player.avatar_index ?? 0}
-              url={player.avatar_url}
-              className="pp-photo"
-              style={{ width: "3.2rem", height: "3.2rem", border: "2px solid var(--tos-gold, #eab308)" }}
-            />
-            <div style={{ background: "rgba(0,0,0,0.6)", padding: "0.2rem 0.6rem", borderRadius: "0.6rem" }}>
-              <span style={{ fontSize: "0.75rem", color: "var(--tos-gold, #eab308)", fontWeight: "bold" }}>
-                محيط {player.name}
-              </span>
-              <p style={{ margin: 0, fontSize: "0.7rem", color: "#cbd5e1" }}>
-                انقر على أي سفينة للإغارة أو الهجوم
-              </p>
-            </div>
-          </div>
-
-          {/* سفن العدو العائمة القابلة للنقر */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: `repeat(${enemyFleet.length}, 1fr)`,
-              gap: "0.6rem",
-              marginTop: "0.8rem",
-              zIndex: 2,
-            }}
-          >
-            {enemyFleet.map((s) => {
-              const isSelected = selectedShipId === s.id;
-              const hpPct = Math.round((s.hp / s.maxHp) * 100);
-              const isHit = attackEffect?.shipId === s.id;
-
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => {
-                    playSfx("click", 0.6);
-                    setSelectedShipId(s.id);
-                    setActiveTab("none");
-                    setPlunderNotice(null);
-                  }}
-                  style={{
-                    position: "relative",
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    padding: "0.6rem 0.3rem",
-                    borderRadius: "1rem",
-                    background: isSelected
-                      ? "radial-gradient(circle, rgba(234,179,8,0.3) 0%, rgba(15,23,42,0.85) 100%)"
-                      : "rgba(15,23,42,0.75)",
-                    border: isSelected
-                      ? "2px solid var(--tos-gold, #eab308)"
-                      : "1px solid rgba(255,255,255,0.2)",
-                    boxShadow: isSelected ? "0 0 15px rgba(234,179,8,0.5)" : "none",
-                    cursor: "pointer",
-                    transition: "all 0.2s ease",
-                    transform: isHit ? "scale(0.95)" : "scale(1)",
-                    opacity: s.isSunk ? 0.45 : 1,
-                  }}
-                >
-                  <img
-                    src={s.ship.hull}
-                    alt={s.name}
-                    style={{
-                      width: "4.5rem",
-                      height: "3.5rem",
-                      objectFit: "contain",
-                      filter: s.isSunk ? "grayscale(1) brightness(0.6)" : "drop-shadow(0 4px 6px rgba(0,0,0,0.6))",
-                    }}
-                  />
-
-                  {/* شريط الصحة */}
-                  <div
-                    style={{
-                      width: "90%",
-                      height: "5px",
-                      background: "rgba(0,0,0,0.5)",
-                      borderRadius: "3px",
-                      overflow: "hidden",
-                      margin: "0.3rem 0 0.2rem",
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: `${hpPct}%`,
-                        height: "100%",
-                        background: hpPct > 50 ? "#22c55e" : hpPct > 25 ? "#eab308" : "#ef4444",
-                        transition: "width 0.3s ease",
-                      }}
-                    />
-                  </div>
-
-                  <strong style={{ fontSize: "0.75rem", color: isSelected ? "var(--tos-gold, #eab308)" : "#f8fafc" }}>
-                    {s.name}
-                  </strong>
-
-                  {/* رصيد حمولة السمك */}
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "0.2rem",
-                      fontSize: "0.65rem",
-                      color: "#94a3b8",
-                      marginTop: "0.1rem",
-                    }}
-                  >
-                    <Fish className="h-3 w-3" style={{ color: "#38bdf8" }} />
-                    <span>{s.fishCargo[0]?.qty ?? 0} {s.fishCargo[0]?.name}</span>
-                  </div>
-
-                  {s.isSunk && (
-                    <span
-                      style={{
-                        position: "absolute",
-                        top: "35%",
-                        background: "#ef4444",
-                        color: "white",
-                        fontSize: "0.65rem",
-                        padding: "0.1rem 0.4rem",
-                        borderRadius: "4px",
-                        fontWeight: "bold",
-                      }}
-                    >
-                      غارقة
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+    <div className="enemy-ocean" role="dialog" aria-modal="true" aria-label={`محيط ${player.name}`} dir="rtl">
+      <SeaScene theme={world} params={{ amp: 1.25, spd: 1.1, foam: 0.85 }} className="enemy-ocean-canvas" />
+      <div className="enemy-ocean-shade" />
+      <header className="enemy-ocean-hud">
+        <div className="enemy-captain">
+          <CaptainAvatar seed={player.avatar_index ?? 0} url={player.avatar_url} className="enemy-avatar" />
+          <div><small>محيط القبطان</small><strong>{player.name}</strong><span>{live ? "🟢 متصل الآن" : "⚪ غير متصل"} · {world.name}</span></div>
         </div>
+        <div className="enemy-hud-actions">
+          {!isMe && <button className="enemy-hud-button" onClick={onMessage}><MessageCircle size={16} /> مراسلة</button>}
+          <button className="enemy-exit" onClick={onClose}><LogOut size={16} /> خروج</button>
+        </div>
+      </header>
 
-        {/* لوحة التحكم بالسفينة المختارة بستايل نافذة المكافأة */}
-        {selectedEnemyShip && (
-          <div
-            style={{
-              marginTop: "0.8rem",
-              padding: "0.8rem",
-              borderRadius: "1.2rem",
-              background: "rgba(15, 23, 42, 0.95)",
-              border: "1.5px solid var(--tos-gold, #eab308)",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: "0.7rem",
-                borderBottom: "1px solid rgba(234,179,8,0.3)",
-                paddingBottom: "0.4rem",
-              }}
-            >
-              <div>
-                <span className="daily-kicker" style={{ fontSize: "0.65rem" }}>السفينة المختارة</span>
-                <h3 style={{ margin: 0, fontSize: "1.1rem", color: "var(--tos-gold, #eab308)" }}>
-                  {selectedEnemyShip.name}
-                </h3>
-              </div>
-              <div style={{ textAlign: "left" }}>
-                <span style={{ fontSize: "0.7rem", color: "#94a3b8" }}>الحمولة الحالية</span>
-                <div style={{ color: "#38bdf8", fontWeight: "bold", fontSize: "0.85rem" }}>
-                  🐟 {selectedEnemyShip.fishCargo[0]?.qty ?? 0} {selectedEnemyShip.fishCargo[0]?.name}
-                </div>
-              </div>
-            </div>
+      <div className="enemy-ocean-info"><span>🌊 محيط متحرك · اضغط سفينة لعرض أوامرك</span><span>⚓ {fleet.filter((s) => !s.sunk).length} سفن قائمة</span></div>
+      {notice && <div className="enemy-toast" role="status">{notice}</div>}
 
-            {/* الأزرار الثلاثة الرئيسية على طراز خلايا المكافأة */}
-            <div className="daily-track" style={{ gridTemplateColumns: "repeat(3, 1fr)", gap: "0.5rem" }}>
-              {/* زر السرقة */}
-              <button
-                type="button"
-                className={`daily-cell ${activeTab === "plunder" ? "daily-cell-now" : ""}`}
-                disabled={selectedEnemyShip.isSunk}
-                onClick={() => {
-                  playSfx("click", 0.7);
-                  setActiveTab((prev) => (prev === "plunder" ? "none" : "plunder"));
-                }}
-                style={{ cursor: "pointer" }}
-              >
-                <small>نهب</small>
-                <Fish className="h-6 w-6" style={{ color: "#38bdf8", marginTop: "0.3rem" }} />
-                <b>سرقة السمك</b>
-              </button>
-
-              {/* زر الهجوم */}
-              <button
-                type="button"
-                className={`daily-cell ${activeTab === "attack" ? "daily-cell-now" : ""}`}
-                disabled={selectedEnemyShip.isSunk}
-                onClick={() => {
-                  playSfx("click", 0.7);
-                  setActiveTab((prev) => (prev === "attack" ? "none" : "attack"));
-                }}
-                style={{ cursor: "pointer" }}
-              >
-                <small>قتال</small>
-                <Swords className="h-6 w-6" style={{ color: "#ef4444", marginTop: "0.3rem" }} />
-                <b>هجوم بالأسلحة</b>
-              </button>
-
-              {/* زر الدعم */}
-              <button
-                type="button"
-                className={`daily-cell ${activeTab === "support" ? "daily-cell-now" : ""}`}
-                onClick={() => {
-                  playSfx("click", 0.7);
-                  setActiveTab((prev) => (prev === "support" ? "none" : "support"));
-                }}
-                style={{ cursor: "pointer" }}
-              >
-                <small>إسناد</small>
-                <Users className="h-6 w-6" style={{ color: "#22c55e", marginTop: "0.3rem" }} />
-                <b>دعم بالطواقم</b>
-              </button>
-            </div>
-
-            {/* قائمة اختيار سفينتك للسرقة */}
-            {activeTab === "plunder" && (
-              <div style={{ marginTop: "0.8rem", animation: "fadeIn 0.2s ease" }}>
-                <p style={{ fontSize: "0.75rem", color: "#e2e8f0", marginBottom: "0.5rem", fontWeight: "bold" }}>
-                  اختر السفينة التي ترسلها للغارة من أسطولك (ستبحر لتقف بمحاذاة سفينته):
-                </p>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(7rem, 1fr))", gap: "0.4rem" }}>
-                  {myShips.slice(0, 4).map((ms) => (
-                    <button
-                      key={ms.id}
-                      type="button"
-                      onClick={() => void handleStartPlunder(ms)}
-                      className="daily-cell"
-                      style={{ cursor: "pointer", padding: "0.4rem", background: "rgba(30, 41, 59, 0.8)" }}
-                    >
-                      <img src={ms.hull} alt={ms.name} style={{ width: "3.2rem", height: "2.4rem", objectFit: "contain" }} />
-                      <b style={{ fontSize: "0.7rem", marginTop: "0.2rem" }}>{ms.name}</b>
-                      <span style={{ fontSize: "0.6rem", color: "var(--tos-gold, #eab308)" }}>بدء الإغارة</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* قائمة ترسانة الأسلحة للهجوم المباشر */}
-            {activeTab === "attack" && (
-              <div style={{ marginTop: "0.8rem", animation: "fadeIn 0.2s ease" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-                  <p style={{ fontSize: "0.75rem", color: "#e2e8f0", margin: 0, fontWeight: "bold" }}>
-                    اختر سلاحاً لضرب السفينة مباشرة:
-                  </p>
-                  {!isMe && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        playSfx("click", 0.9);
-                        onAttack();
-                      }}
-                      className="tos-btn"
-                      style={{ fontSize: "0.7rem", padding: "0.2rem 0.6rem" }}
-                    >
-                      <Swords className="h-3 w-3" /> معركة شاملة
-                    </button>
-                  )}
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.4rem" }}>
-                  {CARDS.slice(0, 6).map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => handleAttackWithWeapon(c.id)}
-                      className="daily-cell"
-                      style={{ cursor: "pointer", padding: "0.4rem" }}
-                    >
-                      <img src={c.art} alt={c.name} style={{ width: "2.2rem", height: "2.2rem", borderRadius: "4px" }} />
-                      <b style={{ fontSize: "0.7rem" }}>{c.name}</b>
-                      <span style={{ fontSize: "0.6rem", color: "#ef4444" }}>{c.note}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* قائمة إرسال الطواقم للدعم */}
-            {activeTab === "support" && (
-              <div style={{ marginTop: "0.8rem", animation: "fadeIn 0.2s ease" }}>
-                <p style={{ fontSize: "0.75rem", color: "#e2e8f0", marginBottom: "0.5rem", fontWeight: "bold" }}>
-                  اختر طاقماً لإرساله ودعم السفينة:
-                </p>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.4rem" }}>
-                  {CREWS.slice(0, 3).map((cr) => (
-                    <button
-                      key={cr.id}
-                      type="button"
-                      onClick={() => handleSupportCrew(cr.id)}
-                      className="daily-cell"
-                      style={{ cursor: "pointer", padding: "0.4rem" }}
-                    >
-                      <img src={cr.icon} alt={cr.name} style={{ width: "2rem", height: "2rem" }} />
-                      <b style={{ fontSize: "0.7rem" }}>{cr.name}</b>
-                      <span style={{ fontSize: "0.6rem", color: "#22c55e" }}>{cr.desc}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* أزرار أسفل النافذة */}
-        <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.9rem" }}>
-          {!isMe && (
-            <button
-              type="button"
-              className="studio-chip pp-msg"
-              style={{ flex: 1, justifyContent: "center" }}
-              onClick={() => {
-                playSfx("click", 0.6);
-                onMessage();
-              }}
-            >
-              <MessageCircle className="h-4 w-4" /> مراسلة القبطان
+      <main className="enemy-sea-area" onClick={() => setSelectedId(null)}>
+        {projectile && <div className="enemy-projectile" style={{ left: `${fleet[projectile.targetId]?.x ?? 50}%`, top: `${(fleet[projectile.targetId]?.y ?? 50) - 20}%` }}>{projectile.icon}</div>}
+        {fleet.map((s) => {
+          const fish = FISH.find((f) => f.id === s.fishId);
+          const chosen = selectedId === s.id;
+          return <div key={s.id} className={`enemy-ship-anchor ${chosen ? "chosen" : ""} ${s.sunk ? "sunk" : ""}`} style={{ left: `${s.x}%`, top: `${s.y}%` }} onClick={(e) => { e.stopPropagation(); setSelectedId(s.id); setNotice(""); playSfx("click", 0.5); }}>
+            {chosen && <div className="enemy-ship-actions" onClick={(e) => e.stopPropagation()}>
+              <button disabled={s.sunk} onClick={() => setModal("attack")}><i className="attack-icon"><Swords /></i><b>هجوم</b></button>
+              <button disabled={s.sunk || s.fishQty <= 0} onClick={() => setModal("plunder")}><i className="plunder-icon"><Fish /></i><b>نهب</b></button>
+              <button onClick={() => setModal("support")}><i className="support-icon"><Shield /></i><b>دعم</b></button>
+            </div>}
+            {travelling?.targetId === s.id && <div className="enemy-raider" aria-label="سفينة تبحر للنهب">⛵<small>{travelling.ship}</small></div>}
+            <button className="enemy-ship-button" aria-label={`اختيار ${s.ship.name}`}>
+              <img src={s.ship.hull} alt="" />
+              <span className="enemy-hp"><i style={{ width: `${(s.hp / s.maxHp) * 100}%` }} /></span>
+              <strong>{s.ship.name}</strong>
+              <small><Fish size={12} /> {s.fishQty} {fish?.name ?? "سمكة"}</small>
+              {s.sunk && <em>غرقت</em>}
             </button>
-          )}
-          <button
-            type="button"
-            className="tos-btn daily-claim"
-            style={{ flex: 1, margin: 0, justifyContent: "center" }}
-            onClick={onClose}
-          >
-            إغلاق المحيط
-          </button>
-        </div>
-      </div>
+          </div>;
+        })}
+      </main>
+
+      {target && <div className="enemy-target-card"><Anchor size={15} /><span>السفينة المحددة: <b>{target.ship.name}</b></span><span>الحمولة: {target.fishQty} سمكة</span><button onClick={() => setSelectedId(null)} aria-label="إلغاء تحديد السفينة"><X size={15} /></button></div>}
+
+      {modal && target && <div className="enemy-modal-backdrop" role="dialog" aria-modal="true" onClick={() => setModal(null)}>
+        <section className="daily-panel enemy-action-modal" dir="rtl" onClick={(e) => e.stopPropagation()}>
+          <button className="tos-x" aria-label="إغلاق" onClick={() => setModal(null)}><X size={17} /></button>
+          <header className="daily-head">
+            <span className="daily-kicker">{modal === "attack" ? "ترسانة الأسطول" : modal === "plunder" ? "اختيار سفينة الغارة" : "غرفة القباطنة والطواقم"}</span>
+            <h2 className="daily-title">{modal === "attack" ? `اختر سلاحاً لضرب ${target.ship.name}` : modal === "plunder" ? `اختر سفينة لنهب ${target.ship.name}` : `أرسل دعماً إلى ${target.ship.name}`}</h2>
+            <div className="daily-streak"><b>{modal === "attack" ? target.hp : modal === "plunder" ? target.fishQty : "+35"}</b><span>{modal === "attack" ? `من ${target.maxHp} درع` : modal === "plunder" ? "سمكة متاحة" : "نقطة ترميم"}</span></div>
+          </header>
+          <div className="enemy-choice-grid">
+            {modal === "attack" && (availableWeapons.length ? availableWeapons.map((w) => <button className="enemy-choice" key={w.id} onClick={() => attack(w.id)}><span>💣</span><b>{w.name}</b><small>قوة الضرر: {w.dmg}</small><em>إطلاق على السفينة المحددة</em></button>) : <p className="enemy-empty">لا توجد أسلحة مجهزة على سفنك حالياً.</p>)}
+            {modal === "plunder" && myShips.map((s) => <button className="enemy-choice" key={s.key} onClick={() => void plunder(s)}><img src={s.hull} alt="" /><b>{s.name}</b><small>سفينة الغارة</small><em>إرسال بجوار السفينة المحددة</em></button>)}
+            {modal === "support" && CREWS.map((crew) => <button className="enemy-choice" key={crew.id} onClick={() => support(crew.name)}><span><Users /></span><b>{crew.name}</b><small>{crew.desc}</small><em>إرسال طاقم الدعم</em></button>)}
+          </div>
+        </section>
+      </div>}
+
+      <style>{`
+        .enemy-ocean{position:fixed;inset:0;z-index:220;overflow:hidden;background:#071523;color:#fff;display:flex;flex-direction:column;isolation:isolate}
+        .enemy-ocean-canvas{position:absolute!important;inset:0;width:100%!important;height:100%!important;z-index:0}
+        .enemy-ocean-shade{position:absolute;inset:0;z-index:1;pointer-events:none;background:linear-gradient(180deg,rgba(3,12,22,.88),transparent 25%,rgba(3,12,22,.12) 65%,rgba(3,12,22,.72)),radial-gradient(ellipse at center,transparent 30%,rgba(0,0,0,.42) 100%)}
+        .enemy-ocean-hud{display:flex;align-items:center;justify-content:space-between;padding:max(.65rem,env(safe-area-inset-top)) 1rem .7rem;background:linear-gradient(180deg,rgba(4,17,28,.9),rgba(4,17,28,.55));border-bottom:1px solid #d8ab4d66;z-index:5;gap:.6rem}
+        .enemy-captain{display:flex;align-items:center;gap:.65rem;min-width:0}.enemy-avatar{width:3.2rem;height:3.2rem;border:2px solid #eabf5b;border-radius:50%;overflow:hidden;flex:none}.enemy-captain>div{display:grid;gap:.1rem}.enemy-captain small{color:#e9bd58;font-size:.68rem}.enemy-captain strong{font-size:1.05rem}.enemy-captain span{font-size:.68rem;color:#cbd5e1}
+        .enemy-hud-actions{display:flex;gap:.45rem}.enemy-hud-button,.enemy-exit{display:flex;align-items:center;gap:.35rem;padding:.5rem .7rem;border:1px solid #d8ab4d80;border-radius:.7rem;background:#0b1d2add;color:#f7d684;font-weight:800;cursor:pointer}.enemy-exit{background:#8f1f27dd;color:white;border-color:#fca5a5}
+        .enemy-ocean-info{z-index:3;display:flex;justify-content:space-between;gap:.5rem;padding:.4rem .85rem;color:#e2e8f0;font-size:.75rem;text-shadow:0 2px 5px #000}
+        .enemy-toast{position:absolute;z-index:15;top:6.2rem;left:50%;transform:translateX(-50%);width:min(92vw,34rem);padding:.65rem .9rem;border:1px solid #eabf5b;border-radius:.85rem;background:#071523ed;color:#ffe7a0;text-align:center;font-weight:800;box-shadow:0 8px 30px #0008}
+        .enemy-sea-area{position:relative;flex:1;min-height:0;overflow:hidden;z-index:2}.enemy-projectile{position:absolute;z-index:18;transform:translate(-50%,-50%);font-size:2.5rem;filter:drop-shadow(0 0 12px #ef4444);animation:enemy-fall .75s ease-in forwards;pointer-events:none}
+        .enemy-ship-anchor{position:absolute;transform:translate(-50%,-50%);display:grid;justify-items:center;animation:enemy-bob 3.3s ease-in-out infinite;cursor:pointer}.enemy-ship-anchor:nth-child(2){animation-delay:-1.2s}.enemy-ship-anchor:nth-child(3){animation-delay:-2.1s}
+        .enemy-ship-button{position:relative;display:grid;justify-items:center;gap:.14rem;padding:.3rem .4rem .38rem;border:1px solid #f1cf7b66;border-radius:.9rem;background:#071523a8;color:white;backdrop-filter:blur(4px);cursor:pointer;min-width:7rem}.enemy-ship-button img{width:clamp(6rem,16vw,10rem);height:clamp(4rem,10vw,6rem);object-fit:contain;filter:drop-shadow(0 6px 5px #000a)}.enemy-ship-button strong{font-size:.73rem;color:#ffdf88;text-shadow:0 1px 4px #000}.enemy-ship-button small{display:flex;align-items:center;gap:.2rem;color:#9de7ff;font-size:.66rem}.enemy-ship-button em{position:absolute;inset:32% 0 auto;color:#fecaca;font-weight:900;background:#991b1bcc}.enemy-hp{width:85%;height:5px;border-radius:99px;background:#111;overflow:hidden}.enemy-hp i{display:block;height:100%;background:linear-gradient(90deg,#ef4444,#4ade80);transition:width .35s}
+        .enemy-ship-anchor.chosen .enemy-ship-button{border:2px solid #f5ca66;box-shadow:0 0 24px #f5ca6680}.enemy-ship-anchor.sunk{filter:grayscale(1);opacity:.65}
+        .enemy-ship-actions{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);display:flex;gap:.55rem;z-index:10;white-space:nowrap}.enemy-ship-actions button{display:grid;justify-items:center;gap:.15rem;background:none;border:0;color:#ffe7a0;font-weight:900;cursor:pointer}.enemy-ship-actions i{width:clamp(2.6rem,10vw,3.3rem);aspect-ratio:1;border:2px solid #e9bd58;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 30% 25%,#304b65,#0a1420);box-shadow:0 0 15px #eabf5b66}.enemy-ship-actions svg{width:1.25rem}.enemy-ship-actions .attack-icon{color:#fecaca;border-color:#ef7777}.enemy-ship-actions .plunder-icon{color:#a5f3fc;border-color:#6dd3e8}.enemy-ship-actions .support-icon{color:#bbf7d0;border-color:#70d899}.enemy-ship-actions b{font-size:.68rem;background:#071523dc;padding:.08rem .45rem;border-radius:99px}
+        .enemy-raider{position:absolute;z-index:12;left:-25%;top:10%;font-size:2rem;animation:enemy-raid 1.8s ease forwards;display:grid;justify-items:center}.enemy-raider small{font-size:.6rem;color:#ffe7a0;background:#071523dd;border-radius:99px;padding:.1rem .3rem;white-space:nowrap}
+        .enemy-target-card{position:absolute;z-index:6;bottom:max(.65rem,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:.6rem;padding:.55rem .75rem;border:1px solid #e9bd58;border-radius:99px;background:#071523e8;color:#e7eef6;font-size:.73rem;white-space:nowrap;box-shadow:0 5px 20px #0008}.enemy-target-card svg{color:#f1cd78}.enemy-target-card button{display:grid;place-items:center;background:none;border:0;color:#fff;cursor:pointer}
+        .enemy-modal-backdrop{position:fixed;inset:0;z-index:30;display:grid;place-items:center;padding:1rem;background:#020812c9;backdrop-filter:blur(7px)}.enemy-action-modal{position:relative;width:min(100%,38rem);max-height:min(88svh,48rem);overflow:auto;padding:1rem!important}.enemy-choice-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.55rem;margin-top:.8rem}.enemy-choice{display:grid;justify-items:center;align-content:start;gap:.28rem;min-height:9rem;padding:.65rem .45rem;border:1px solid #d3ac57;border-radius:.9rem;background:linear-gradient(160deg,#26394a,#101d29);color:#fff;text-align:center;cursor:pointer;box-shadow:inset 0 0 0 1px #ffffff12}.enemy-choice:hover{border-color:#ffe08b;transform:translateY(-2px)}.enemy-choice>span{font-size:1.8rem;color:#f5d276}.enemy-choice>span svg{width:1.7rem;height:1.7rem}.enemy-choice img{width:5rem;height:3.5rem;object-fit:contain}.enemy-choice b{color:#ffe08b;font-size:.85rem}.enemy-choice small{color:#dbe4ed;font-size:.69rem}.enemy-choice em{font-style:normal;color:#83dffc;font-size:.66rem}.enemy-empty{grid-column:1/-1;text-align:center;color:#f6d578}
+        @keyframes enemy-bob{0%,100%{translate:0 0}50%{translate:0 -8px}}@keyframes enemy-fall{0%{translate:0 -140px;scale:.65;opacity:.2}55%{opacity:1}100%{translate:0 0;scale:1.15;opacity:1}}@keyframes enemy-raid{0%{opacity:0;transform:translateX(-30%)}20%{opacity:1}100%{transform:translateX(180%);opacity:1}}
+        @media(max-width:600px){.enemy-ocean-hud{padding-inline:.55rem}.enemy-avatar{width:2.6rem;height:2.6rem}.enemy-hud-button,.enemy-exit{padding:.42rem .5rem;font-size:.68rem}.enemy-captain strong{font-size:.88rem}.enemy-ship-button{min-width:5.2rem;padding:.2rem}.enemy-ship-button img{width:clamp(4.8rem,23vw,6.6rem);height:3.7rem}.enemy-ship-actions{gap:.2rem}.enemy-ship-actions i{width:2.5rem}.enemy-target-card{max-width:94vw;overflow:hidden;white-space:nowrap;font-size:.62rem;gap:.35rem}}
+      `}</style>
     </div>
   );
 }
