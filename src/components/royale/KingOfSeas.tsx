@@ -11,52 +11,65 @@ import { royaleScript, type RoyaleSeat } from "@/components/royale/royaleInject"
 const LOBBY_SECONDS = 10;
 const SLOTS = 10;
 const LOBBY_CHANNEL = "royale-lobby";
-const BOT_NAMES = [
+export const BOT_NAMES = [
   "صقر الخلجان", "الحوت الأسود", "قاهر العواصف", "ذيب اليم", "سيف المرجان",
   "ريّس الموج", "نجم الشمال", "شبح الضباب", "عقاب الصخور", "رعد الأعماق", "ملاح الفجر",
 ];
 
-type Seat = { id: string; name: string; isBot: boolean; me?: boolean; avatar_index?: number; avatar_url?: string | null; joined: number };
+export type Seat = { id: string; name: string; isBot: boolean; me?: boolean; avatar_index?: number; avatar_url?: string | null; joined: number };
 
-/**
- * The game file is served by the asset CDN as a download with scripts disabled, so it can't run
- * when loaded directly in a frame. We fetch its text during the countdown, bake the start settings
- * in place of `location.search`, and open it from a local blob URL — scripts run and it opens instantly.
- */
+const CDN_FALLBACK = "https://preview--captain-to-captain-cards.lovable.app";
+
+/** يضمن تحميل أصول اللعبة ومجسم التنين بنجاح على فيرسل وعلى الخوادم المحلية */
+export function resolveAssetUrl(url: string): string {
+  if (!url) return url;
+  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("blob:")) return url;
+  if (typeof window !== "undefined" && window.location.hostname.endsWith("lovable.app")) {
+    return url;
+  }
+  return `${CDN_FALLBACK}${url}`;
+}
+
 let gamePromise: Promise<string> | null = null;
 let dragonPromise: Promise<string> | null = null;
-/** Download the dragon model once into memory so it appears the moment the battle starts. */
-function prepareDragon(): Promise<string> {
+
+/** تحميل مجسم التنين الثلاثي الأبعاد في الذاكرة */
+export function prepareDragon(): Promise<string> {
   if (!dragonPromise) {
-    const src = new URL(dragonAsset.url, window.location.origin).href;
-    dragonPromise = fetch(src).then((r) => r.blob()).then((b) => URL.createObjectURL(new Blob([b], { type: "model/gltf-binary" }))).catch(() => src);
+    const src = resolveAssetUrl(dragonAsset.url);
+    dragonPromise = fetch(src)
+      .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
+      .then((b) => URL.createObjectURL(new Blob([b], { type: "model/gltf-binary" })))
+      .catch(() => src);
   }
   return dragonPromise;
 }
-/** Fetch + patch the game page text (cached). The launch step adds the captains and opens it. */
+
+/** تجهيز صفحة اللعبة وربط التنين بها */
 export function prepareGame(): Promise<string> {
   if (!gamePromise) {
+    const gameSrc = resolveAssetUrl(gameAsset.url);
     gamePromise = Promise.all([
-      fetch(gameAsset.url).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.text(); }),
+      fetch(gameSrc).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.text(); }),
       prepareDragon(),
     ])
       .then(([html, dragon]) => {
         const search = `?autostart=1&dragon=${encodeURIComponent(dragon)}`;
         return html
           .split("location.search").join(JSON.stringify(search))
-          // dragon arrives right away and close by
-          .replace("spawnIn:5,", "spawnIn:1,")
-          .replace("V(s.pos.x+Math.cos(a)*260,45,s.pos.z+Math.sin(a)*260)", "V(s.pos.x+Math.cos(a)*110,45,s.pos.z+Math.sin(a)*110)")
-          // the island is reached by last-3-ships, not by dragon kills
-          .replace("if(W.kills>=2&&W.stage!==\"island\")", "if(false)");
+          // وصول التنين وقربه لقتاله
+          .replace("spawnIn:5,", "spawnIn:2,")
+          .replace("V(s.pos.x+Math.cos(a)*260,45,s.pos.z+Math.sin(a)*260)", "V(s.pos.x+Math.cos(a)*130,45,s.pos.z+Math.sin(a)*130)");
       })
       .catch((e) => { gamePromise = null; throw e; });
   }
   return gamePromise;
 }
-function openGame(html: string, seats: RoyaleSeat[]): string {
+
+export function openGame(html: string, seats: RoyaleSeat[], selfId = "offline"): string {
   const i = html.lastIndexOf("</body>");
-  const out = i >= 0 ? html.slice(0, i) + royaleScript(seats) + html.slice(i) : html + royaleScript(seats);
+  const script = royaleScript(seats, selfId);
+  const out = i >= 0 ? html.slice(0, i) + script + html.slice(i) : html + script;
   return URL.createObjectURL(new Blob([out], { type: "text/html" }));
 }
 
@@ -87,17 +100,16 @@ export function LegacyKingOfSeas({ player, playerName, onClose }: { player?: Pla
 
   const me: Seat = { id: myId, name: playerName || "القبطان", isBot: false, me: true, avatar_index: player?.avatar_index ?? nameSeed(playerName), avatar_url: player?.avatar_url ?? null, joined: joinedAt };
 
-  // Start preloading immediately.
   useEffect(() => {
     prepareGame().then(() => setReady(true)).catch(() => setReady(false));
   }, []);
+
   useEffect(() => {
     const onMsg = (e: MessageEvent) => { if ((e.data as { type?: string })?.type === "kos-exit") onClose(); };
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
   }, [onClose]);
 
-  // Shared waiting room: captains opening the lobby on other devices appear in real time.
   useEffect(() => {
     const chan = supabase.channel(LOBBY_CHANNEL, { config: { presence: { key: myId } } });
     chan.on("presence", { event: "sync" }, () => {
@@ -111,10 +123,8 @@ export function LegacyKingOfSeas({ player, playerName, onClose }: { player?: Pla
     });
     void chan.subscribe((st) => { if (st === "SUBSCRIBED") void chan.track(me); });
     return () => { void supabase.removeChannel(chan); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myId]);
 
-  // Room clock: the earliest captain in the room sets the start time for everyone.
   const roomStart = Math.min(joinedAt, ...humans.map((h) => h.joined));
   const left = Math.max(0, Math.ceil((roomStart + LOBBY_SECONDS * 1000 - now) / 1000));
 
@@ -126,7 +136,6 @@ export function LegacyKingOfSeas({ player, playerName, onClose }: { player?: Pla
 
   const realSeats = [me, ...humans].sort((a, b) => a.joined - b.joined).slice(0, SLOTS);
 
-  // AI captains fill empty seats as the clock runs down.
   useEffect(() => {
     if (phase !== "lobby") return;
     const free = SLOTS - realSeats.length;
@@ -142,7 +151,6 @@ export function LegacyKingOfSeas({ player, playerName, onClose }: { player?: Pla
       });
     }
     if (left <= 0) launch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [left, phase, realSeats.length]);
 
   const launched = useRef(false);
@@ -150,9 +158,9 @@ export function LegacyKingOfSeas({ player, playerName, onClose }: { player?: Pla
     if (launched.current) return;
     launched.current = true;
     playSfx("click", 1);
-    const list: RoyaleSeat[] = [...realSeats, ...bots].slice(0, SLOTS).map((s) => ({ name: s.name, isBot: s.isBot, me: !!s.me }));
+    const list: RoyaleSeat[] = [...realSeats, ...bots].slice(0, SLOTS).map((s) => ({ id: s.id, name: s.name, isBot: s.isBot, me: !!s.me }));
     if (!ready) setPhase("loading");
-    prepareGame().then((html) => { setGameUrl(openGame(html, list)); setPhase("game"); }).catch(() => { launched.current = false; setPhase("error"); });
+    prepareGame().then((html) => { setGameUrl(openGame(html, list, myId)); setPhase("game"); }).catch(() => { launched.current = false; setPhase("error"); });
   };
 
   const seats = [...realSeats, ...bots].slice(0, SLOTS);
