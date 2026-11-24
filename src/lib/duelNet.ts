@@ -1,13 +1,13 @@
 /**
- * Live 1v1 duels over Lovable Cloud Realtime (public channels, publishable key only — no DB writes).
+ * Live 1v1 duels over Photon Realtime + Supabase Lobby.
  *
  * Layers:
- *  1. Lobby channel `duel-lobby`: presence shows which captains are online; broadcast carries
- *     challenge / accept / decline handshakes.
- *  2. Pair handshake: the challenger generates the matchId and both sides join `duel-<matchId>`.
- *  3. Battle channel: every state-changing play (fire / shield / burn / move / leave) is broadcast;
- *     the acting client is authoritative and both clients replay the same event on the same
- *     deterministic initial state, so views stay in lockstep.
+ *  1. Lobby channel `duel-lobby` (Supabase Realtime): presence shows which captains are online;
+ *     broadcast carries challenge / accept / decline handshakes.
+ *  2. Pair handshake: the challenger generates the matchId and both sides accept.
+ *  3. Battle session (Photon Realtime SDK): both sides join room `duel-<matchId>` on Photon Cloud.
+ *     Every state-changing play (fire / shield / burn / move / leave) is raised in real-time
+ *     over Photon WebSocket with minimal latency.
  */
 import { useEffect, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
@@ -15,6 +15,14 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Player } from "@/lib/player";
 import type { DuelFireEvent } from "@/fx/weapons/playFireEvent";
 import type { Side } from "@/game/duel";
+
+// @ts-ignore
+import Photon from "photon-realtime";
+
+export const PHOTON_APP_ID =
+  (import.meta.env.VITE_PHOTON_APP_ID as string) || "3fa819a4-e442-4730-81e2-3c7420a8e033";
+const PHOTON_APP_VERSION = "1.0";
+const DUEL_EVENT_CODE = 1;
 
 export type LobbyMeta = {
   id: string;
@@ -157,7 +165,6 @@ export function useDuelLobby(me: Player | null, queueing: boolean, where?: strin
       if (!document.hidden && meRef.current) void chan.track(metaOf(meRef.current, queueingRef.current, whereRef.current));
     }, 5_000);
 
-    // Leave the online list the moment the game is hidden or closed; rejoin when it's back.
     const onVis = () => {
       if (document.hidden) void chan.untrack();
       else if (meRef.current) void chan.track(metaOf(meRef.current, queueingRef.current, whereRef.current));
@@ -178,14 +185,12 @@ export function useDuelLobby(me: Player | null, queueing: boolean, where?: strin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?.id]);
 
-  /** Announce (or withdraw) my "looking for a duel" state. */
   useEffect(() => {
     const chan = chanRef.current;
     if (chan && me && chan.presenceState()) void chan.track(metaOf(me, queueing, whereRef.current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueing, where]);
 
-  /** Manual refresh: re-announce myself and re-read who is connected right now. */
   const refresh = async () => {
     const chan = chanRef.current, m = meRef.current;
     if (!chan || !m) return;
@@ -193,7 +198,6 @@ export function useDuelLobby(me: Player | null, queueing: boolean, where?: strin
     readRef.current?.();
   };
 
-  /** Challenge a captain; resolves with the matchId when they accept, else declined/timeout. */
   const challenge = (peer: LobbyMeta) =>
     new Promise<ChallengeResult>((resolve) => {
       const chan = chanRef.current, m = meRef.current;
@@ -215,7 +219,6 @@ export function useDuelLobby(me: Player | null, queueing: boolean, where?: strin
       send();
     });
 
-  /** Answer an incoming challenge. Returns match info when accepted. */
   const respond = (c: Challenge, reply: Reply | boolean): { matchId: string; role: "host" | "guest"; foe: Player } | null => {
     const r: Reply = reply === true ? "accept" : reply === false ? "decline" : reply;
     const chan = chanRef.current;
@@ -242,93 +245,141 @@ export function useDuelLobby(me: Player | null, queueing: boolean, where?: strin
   return { others, incoming, outgoing, challenge, respond, cancelOutgoing, refresh };
 }
 
-/** Live battle events travel through a dedicated Realtime channel for this accepted match. */
+/** Live battle events travel through a dedicated Photon Realtime room for this match. */
 type DuelEnvelope = { id: string; event: DuelWire };
 
 export class DuelSession {
   private onEvent: (ev: DuelWire) => void;
   private onFoeGone: () => void;
   private onError: (() => void) | undefined;
-  private channel: RealtimeChannel | null = null;
-  private eventKey: string;
+  private client: any = null;
   private seen = new Set<string>();
   private pending: DuelEnvelope[] = [];
-  private foeSeen = false;
-  private lastSeen = 0;
-  private timer: number;
   private closed = false;
-  private notified = false;
 
-  private constructor(matchId: string, role: "host" | "guest", handlers: { onEvent: (ev: DuelWire) => void; onFoeGone: () => void; onError?: () => void }) {
+  private constructor(
+    matchId: string,
+    role: "host" | "guest",
+    handlers: { onEvent: (ev: DuelWire) => void; onFoeGone: () => void; onError?: () => void }
+  ) {
     this.onEvent = handlers.onEvent;
     this.onFoeGone = handlers.onFoeGone;
     this.onError = handlers.onError;
-    this.eventKey = `duel-${matchId}`;
-    const channel = supabase.channel(this.eventKey, {
-      config: { presence: { key: `${role}-${crypto.randomUUID()}` }, broadcast: { self: false, ack: true } },
-    });
-    this.channel = channel;
-    channel.on("broadcast", { event: "play" }, ({ payload }) => {
-      const envelope = payload as DuelEnvelope;
-      if (!envelope?.id || this.seen.has(envelope.id)) return;
-      this.seen.add(envelope.id);
-      this.onEvent(envelope.event);
-    });
-    channel.on("presence", { event: "sync" }, () => {
-      const peers = Object.values(channel.presenceState() as Record<string, unknown[]>).flat();
-      if (peers.length > 1) {
-        this.foeSeen = true;
-        this.lastSeen = Date.now();
-        this.notified = false;
-      }
-    });
-    void channel.subscribe((status) => {
-      if (status === "SUBSCRIBED") {
-        void channel.track({ role });
-        const queued = this.pending.splice(0);
-        queued.forEach((envelope) => this.publish(envelope));
-      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-        if (!this.closed) this.onError?.();
-      }
-    });
-    this.timer = window.setInterval(() => {
-      if (this.closed || !this.channel || !this.foeSeen) return;
-      const peers = Object.values(this.channel.presenceState() as Record<string, unknown[]>).flat();
-      if (peers.length > 1) { this.lastSeen = Date.now(); return; }
-      if (Date.now() - this.lastSeen > 10_000 && !this.notified) {
-        this.notified = true;
-        this.onFoeGone();
-      }
-    }, 1_000);
+
+    const roomName = `duel-${matchId}`;
+    this.initPhoton(roomName, role);
   }
 
-  static open(matchId: string, role: "host" | "guest", handlers: { onEvent: (ev: DuelWire) => void; onFoeGone: () => void; onError?: () => void }): DuelSession {
+  private initPhoton(roomName: string, role: "host" | "guest") {
+    if (typeof window === "undefined" || this.closed) return;
+
+    try {
+      const P = (Photon?.default || Photon) as any;
+      if (!P) {
+        this.onError?.();
+        return;
+      }
+
+      // Ensure browser native WebSocket is used rather than Node 'ws'
+      if (typeof window !== "undefined" && window.WebSocket && P.PhotonPeer) {
+        P.PhotonPeer.setWebSocketImpl(window.WebSocket);
+      }
+
+      const LBC = P.LoadBalancing?.LoadBalancingClient;
+      if (!LBC) {
+        this.onError?.();
+        return;
+      }
+
+      const client = new LBC(P.ConnectionProtocol.Wss, PHOTON_APP_ID, PHOTON_APP_VERSION);
+      this.client = client;
+
+      client.setUserId(`${role}-${crypto.randomUUID().slice(0, 8)}`);
+
+      client.onStateChange = (state: number) => {
+        if (this.closed) return;
+
+        // When connected to Master Server, join or create the private duel room
+        if (state === LBC.State.ConnectedToMaster) {
+          client.joinRoom(roomName, { createIfNotExists: true }, { maxPlayers: 2 });
+        } else if (state === LBC.State.Joined) {
+          // Flush any events queued while connecting
+          const queued = this.pending.splice(0);
+          queued.forEach((env) => this.publish(env));
+        } else if (state === LBC.State.Error) {
+          this.onError?.();
+        }
+      };
+
+      client.onEvent = (code: number, content: any) => {
+        if (this.closed || code !== DUEL_EVENT_CODE || !content) return;
+        const envelope = content as DuelEnvelope;
+        if (!envelope.id || this.seen.has(envelope.id)) return;
+        this.seen.add(envelope.id);
+        this.onEvent(envelope.event);
+      };
+
+      client.onActorLeave = () => {
+        if (!this.closed) {
+          this.onFoeGone();
+        }
+      };
+
+      client.onError = () => {
+        if (!this.closed) {
+          this.onError?.();
+        }
+      };
+
+      // Connect to Photon Global/European Region Master
+      client.connectToRegionMaster("EU");
+    } catch (err) {
+      console.error("Photon initialization error:", err);
+      if (!this.closed) this.onError?.();
+    }
+  }
+
+  static open(
+    matchId: string,
+    role: "host" | "guest",
+    handlers: { onEvent: (ev: DuelWire) => void; onFoeGone: () => void; onError?: () => void }
+  ): DuelSession {
     return new DuelSession(matchId, role, handlers);
   }
 
   send(ev: DuelWire): void {
     if (this.closed) return;
-    const envelope = { id: crypto.randomUUID(), event: ev };
-    if (!this.channel || this.channel.state !== "joined") this.pending.push(envelope);
-    else this.publish(envelope);
+    const envelope: DuelEnvelope = { id: crypto.randomUUID(), event: ev };
+    if (!this.client || !this.client.isJoinedToRoom?.()) {
+      this.pending.push(envelope);
+    } else {
+      this.publish(envelope);
+    }
   }
 
-  private publish(event: DuelEnvelope) {
-    const channel = this.channel;
-    if (!channel || channel.state !== "joined") { this.pending.push(event); return; }
-    void channel.send({ type: "broadcast", event: "play", payload: event }).then((status) => {
-      if (status !== "ok" && !this.closed && !this.seen.has(event.id)) {
-        window.setTimeout(() => this.publish(event), 350);
-      }
-    });
+  private publish(envelope: DuelEnvelope) {
+    if (this.closed || !this.client) return;
+    try {
+      // ReceiverGroup.Others (0): send to rival only
+      this.client.raiseEvent(DUEL_EVENT_CODE, envelope, { receivers: 0 });
+    } catch {
+      this.pending.push(envelope);
+    }
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    window.clearInterval(this.timer);
-    const channel = this.channel;
-    this.channel = null;
-    if (channel) void supabase.removeChannel(channel);
+    if (this.client) {
+      try {
+        if (this.client.isJoinedToRoom?.()) {
+          this.client.leaveRoom();
+        }
+        this.client.disconnect();
+      } catch {
+        // cleanup ignore
+      }
+      this.client = null;
+    }
   }
 }
