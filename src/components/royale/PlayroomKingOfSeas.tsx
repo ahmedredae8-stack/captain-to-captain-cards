@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Player } from "@/lib/player";
+import crest from "@/assets/royale/kos-crest.png";
 import { playSfx } from "@/lib/sound";
-import { prepareGame } from "@/components/royale/KingOfSeas";
-import { royaleScript, type RoyaleSeat } from "@/components/royale/royaleInject";
+import { CaptainAvatar, nameSeed } from "@/components/GameSprite";
+import type { Player } from "@/lib/player";
+import { prepareGame, openGame, BOT_NAMES, type Seat } from "@/components/royale/KingOfSeas";
+import type { RoyaleSeat } from "@/components/royale/royaleInject";
 
 // @ts-ignore
 import Photon from "photon-realtime";
@@ -11,167 +13,115 @@ export const PHOTON_APP_ID =
   (import.meta.env.VITE_PHOTON_APP_ID as string) || "3fa819a4-e442-4730-81e2-3c7420a8e033";
 const PHOTON_APP_VERSION = "1.0";
 const KOS_ROOM_NAME = "king-of-seas-arena";
+const LOBBY_SECONDS = 10;
 const SLOTS = 10;
 
 const KOS_EVENT_STATE = 10;
 const KOS_EVENT_HIT = 11;
 const KOS_EVENT_START = 12;
-
-const BOT_NAMES = [
-  "صقر الخلجان", "الحوت الأسود", "قاهر العواصف", "ذيب اليم", "سيف المرجان",
-  "ريّس الموج", "نجم الشمال", "شبح الضباب", "عقاب الصخور", "رعد الأعماق", "ملاح الفجر",
-];
+const KOS_EVENT_ISLAND = 13;
 
 type CaptainState = { id: string; name: string; avatar_index: number; avatar_url: string | null };
 type SeaState = { pos: { x: number; y: number; z: number }; hp: number; alive: boolean; yaw?: number };
 type SeaHit = { id: string; shooterId: string; targetId: string; damage: number };
 
-function makeGameUrl(html: string, seats: RoyaleSeat[], playerId: string) {
-  const script = royaleScript(seats, playerId);
-  const at = html.lastIndexOf("</body>");
-  const source = at >= 0 ? html.slice(0, at) + script + html.slice(at) : html + script;
-  return URL.createObjectURL(new Blob([source], { type: "text/html" }));
-}
-
 export function KingOfSeas({ player, playerName, onClose }: { player?: Player | null; playerName: string; onClose: () => void }) {
   const [phase, setPhase] = useState<"lobby" | "loading" | "game" | "error">("lobby");
-  const [message, setMessage] = useState("جارٍ الاتصال بشبكة فوتون…");
   const [gameUrl, setGameUrl] = useState<string | null>(null);
-  const [seatCount, setSeatCount] = useState(1);
-  const [connected, setConnected] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [humans, setHumans] = useState<Seat[]>([]);
+  const [bots, setBots] = useState<Seat[]>([]);
+  const [now, setNow] = useState(() => Date.now());
+  const [joinedAt] = useState(() => Date.now());
 
   const frame = useRef<HTMLIFrameElement>(null);
   const clientRef = useRef<any>(null);
   const blobRef = useRef<string | null>(null);
-  const seatsRef = useRef<RoyaleSeat[]>([]);
-  const isStartedRef = useRef(false);
+  const launchedRef = useRef(false);
 
   const myId = useRef(player?.id ?? `guest-${Math.random().toString(36).slice(2, 9)}`).current;
   const myName = playerName || player?.name || "القبطان";
+  const myAvatarIndex = player?.avatar_index ?? nameSeed(myName);
+  const myAvatarUrl = player?.avatar_url ?? null;
 
-  const buildSeatsList = (actors: any[]): RoyaleSeat[] => {
-    const list: RoyaleSeat[] = [];
-    const usedNames = new Set<string>();
+  const me: Seat = useMemo(() => ({
+    id: myId,
+    name: myName,
+    isBot: false,
+    me: true,
+    avatar_index: myAvatarIndex,
+    avatar_url: myAvatarUrl,
+    joined: joinedAt,
+  }), [myId, myName, myAvatarIndex, myAvatarUrl, joinedAt]);
 
-    // Add self first
-    list.push({
-      id: myId,
-      name: myName,
-      isBot: false,
-      me: true,
-      avatar_index: player?.avatar_index ?? 0,
-      avatar_url: player?.avatar_url ?? null,
-    });
-    usedNames.add(myName);
-
-    // Add other connected human actors
-    for (const actor of actors) {
-      if (actor.isLocal) continue;
-      const custom = actor.getCustomProperty?.("captain") as CaptainState | undefined;
-      const actorName = custom?.name || actor.name || `قبطان ${actor.actorNr}`;
-      const actorId = custom?.id || `actor-${actor.actorNr}`;
-      list.push({
-        id: actorId,
-        name: actorName,
-        isBot: false,
-        me: false,
-        avatar_index: custom?.avatar_index ?? 0,
-        avatar_url: custom?.avatar_url ?? null,
-      });
-      usedNames.add(actorName);
-      if (list.length >= SLOTS) break;
-    }
-
-    // Fill remaining slots with bot captains up to SLOTS
-    const pool = BOT_NAMES.filter((n) => !usedNames.has(n));
-    let botIndex = 0;
-    while (list.length < SLOTS) {
-      const bName = pool[botIndex] || `قرصان ${botIndex + 1}`;
-      list.push({
-        id: `bot-${botIndex + 1}`,
-        name: bName,
-        isBot: true,
-        me: false,
-        avatar_index: (botIndex * 3 + 1) % 10,
-      });
-      botIndex++;
-    }
-
-    return list.slice(0, SLOTS);
-  };
-
-  const launchBattle = async (seats: RoyaleSeat[]) => {
-    if (isStartedRef.current) return;
-    isStartedRef.current = true;
-    seatsRef.current = seats;
-
-    setPhase("loading");
-    setMessage("نجهّز المعركة عبر سيرفرات فوتون…");
-
-    try {
-      const html = await prepareGame();
-      const url = makeGameUrl(html, seats, myId);
-      if (blobRef.current) URL.revokeObjectURL(blobRef.current);
-      blobRef.current = url;
-      setGameUrl(url);
-      setPhase("game");
-      playSfx("click", 0.8);
-    } catch (err) {
-      console.error("Failed to prepare game:", err);
-      isStartedRef.current = false;
-      setPhase("error");
-      setMessage("تعذّر تجهيز المعركة. حاول مجدداً.");
-    }
-  };
-
-  // Connect to Photon Realtime and join room
+  // تحميل HTML اللعبة ومجسم التنين قبل بدء القتال
   useEffect(() => {
-    let unmounted = false;
+    prepareGame().then(() => setReady(true)).catch((err) => {
+      console.warn("Preload notice:", err);
+      setReady(false);
+    });
+  }, []);
+
+  // استقبال طلبات الإغلاق من إطار اللعبة
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      if ((e.data as { type?: string })?.type === "kos-exit") exit();
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
+  // الحصول على قائمة اللاعبين المتصلين بغرفة فوتون
+  const syncPhotonActors = (client: any) => {
+    try {
+      if (!client || !client.isJoinedToRoom?.()) return;
+      const actors = client.myRoomActorsArray?.() || [];
+      const others: Seat[] = [];
+      for (const actor of actors) {
+        if (actor.isLocal) continue;
+        const custom = actor.getCustomProperty?.("captain") as CaptainState | undefined;
+        const aName = custom?.name || actor.name || `قبطان ${actor.actorNr}`;
+        const aId = custom?.id || `actor-${actor.actorNr}`;
+        others.push({
+          id: aId,
+          name: aName,
+          isBot: false,
+          avatar_index: custom?.avatar_index ?? actor.actorNr,
+          avatar_url: custom?.avatar_url ?? null,
+          joined: joinedAt - 1000,
+        });
+      }
+      setHumans(others);
+    } catch {
+      // تجاهل تغيّر قائمة اللاعبين أثناء الاتصال
+    }
+  };
+
+  // الاتصال بغرفة فوتون للّوبي واللعب الجماعي
+  useEffect(() => {
+    let cancelled = false;
 
     try {
       const P = (Photon?.default || Photon) as any;
-      if (!P) {
-        setPhase("error");
-        setMessage("تعذّر تحميل مكتبة Photon.");
-        return;
-      }
+      if (!P) return;
 
       if (typeof window !== "undefined" && window.WebSocket && P.PhotonPeer) {
         P.PhotonPeer.setWebSocketImpl(window.WebSocket);
       }
 
       const LBC = P.LoadBalancing?.LoadBalancingClient;
-      if (!LBC) {
-        setPhase("error");
-        setMessage("مكونات عميل فوتون غير متوفرة.");
-        return;
-      }
+      if (!LBC) return;
 
       const client = new LBC(P.ConnectionProtocol.Wss, PHOTON_APP_ID, PHOTON_APP_VERSION);
       clientRef.current = client;
 
       client.setUserId(myId);
 
-      const updateActors = () => {
-        if (unmounted) return;
-        try {
-          const actors = client.myRoomActorsArray?.() || [];
-          setSeatCount(Math.max(1, actors.length));
-        } catch {
-          // ignore
-        }
-      };
-
       client.onStateChange = (state: number) => {
-        if (unmounted) return;
-
+        if (cancelled) return;
         if (state === LBC.State.ConnectedToMaster) {
-          setMessage("متصل بفوتون — جاري الانضمام للغرفة…");
           client.joinRoom(KOS_ROOM_NAME, { createIfNotExists: true }, { maxPlayers: SLOTS });
         } else if (state === LBC.State.Joined) {
-          setConnected(true);
-          setMessage("أنت في الغرفة — بانتظار بدء المعركة");
-
           const actor = client.myActor();
           if (actor) {
             actor.setName(myName);
@@ -179,93 +129,67 @@ export function KingOfSeas({ player, playerName, onClose }: { player?: Player | 
               captain: {
                 id: myId,
                 name: myName,
-                avatar_index: player?.avatar_index ?? 0,
-                avatar_url: player?.avatar_url ?? null,
+                avatar_index: myAvatarIndex,
+                avatar_url: myAvatarUrl,
               },
             });
           }
-          updateActors();
-        } else if (state === LBC.State.Error) {
-          setPhase("error");
-          setMessage("حدث خطأ أثناء الاتصال بشبكة فوتون.");
+          syncPhotonActors(client);
         }
       };
 
       client.onActorJoin = () => {
-        updateActors();
+        if (cancelled) return;
+        syncPhotonActors(client);
         playSfx("click", 0.4);
       };
 
       client.onActorLeave = () => {
-        updateActors();
+        if (cancelled) return;
+        syncPhotonActors(client);
       };
 
       client.onActorPropertiesChange = () => {
-        updateActors();
+        if (cancelled) return;
+        syncPhotonActors(client);
       };
 
       client.onEvent = (code: number, content: any) => {
-        if (unmounted || !content) return;
+        if (cancelled || !content) return;
 
         if (code === KOS_EVENT_START) {
-          // Remote host started the game
           const remoteSeats = content.seats as RoyaleSeat[] | undefined;
           if (remoteSeats && Array.isArray(remoteSeats)) {
-            const adaptedSeats = remoteSeats.map((s) => ({
-              ...s,
-              me: s.id === myId,
-            }));
-            void launchBattle(adaptedSeats);
+            const adapted = remoteSeats.map((s) => ({ ...s, me: s.id === myId }));
+            void launchWithSeats(adapted);
           }
+        } else if (code === KOS_EVENT_ISLAND) {
+          frame.current?.contentWindow?.postMessage({ type: "kos-go-island" }, "*");
         } else if (code === KOS_EVENT_STATE) {
-          // Ship position/health update from another player
-          const target = frame.current?.contentWindow;
-          if (target && content.id && content.state) {
-            target.postMessage(
-              {
-                type: "kos-remote",
-                id: content.id,
-                name: content.name || "قبطان",
-                state: content.state,
-              },
-              "*"
-            );
-          }
+          frame.current?.contentWindow?.postMessage({
+            type: "kos-remote",
+            id: content.id,
+            name: content.name,
+            state: content.state,
+          }, "*");
         } else if (code === KOS_EVENT_HIT) {
-          // Missile hit from another player
-          const target = frame.current?.contentWindow;
-          if (target && content) {
-            target.postMessage({ type: "kos-hit", hit: content }, "*");
-          }
-        }
-      };
-
-      client.onError = () => {
-        if (!unmounted && phase !== "game") {
-          setPhase("error");
-          setMessage("تعذّر الاتصال بخوادم فوتون.");
+          frame.current?.contentWindow?.postMessage({ type: "kos-hit", hit: content }, "*");
         }
       };
 
       client.connectToRegionMaster("EU");
-    } catch (e) {
-      console.error("Photon setup failed:", e);
-      if (!unmounted) {
-        setPhase("error");
-        setMessage("فشل تشغيل محرك شبكة فوتون.");
-      }
+    } catch (err) {
+      console.warn("Photon lobby error:", err);
     }
 
     return () => {
-      unmounted = true;
+      cancelled = true;
       if (clientRef.current) {
         try {
-          if (clientRef.current.isJoinedToRoom?.()) {
-            clientRef.current.leaveRoom();
-          }
+          if (clientRef.current.isJoinedToRoom?.()) clientRef.current.leaveRoom();
           clientRef.current.disconnect();
         } catch {
-          // ignore
+          // تجاهل أخطاء إغلاق الاتصال
         }
         clientRef.current = null;
       }
@@ -274,28 +198,91 @@ export function KingOfSeas({ player, playerName, onClose }: { player?: Player | 
         blobRef.current = null;
       }
     };
-  }, [myId, myName, player?.avatar_index, player?.avatar_url]);
+  }, [myId, myName, myAvatarIndex, myAvatarUrl]);
 
-  const handleStart = () => {
-    if (!clientRef.current || phase === "loading" || isStartedRef.current) return;
-    const actors = clientRef.current.myRoomActorsArray?.() || [];
-    const seats = buildSeatsList(actors);
+  // تحديث عداد الردهة
+  useEffect(() => {
+    if (phase !== "lobby") return;
+    const t = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(t);
+  }, [phase]);
 
-    // Notify all other players in the room to start together
-    try {
-      clientRef.current.raiseEvent(
-        KOS_EVENT_START,
-        { seats },
-        { receivers: 0 }
-      );
-    } catch (e) {
-      console.warn("Failed to broadcast start event:", e);
+  const roomStart = Math.min(joinedAt, ...humans.map((h) => h.joined));
+  const left = Math.max(0, Math.ceil((roomStart + LOBBY_SECONDS * 1000 - now) / 1000));
+  const realSeats = [me, ...humans].slice(0, SLOTS);
+
+  // ملء المقاعد الفارغة بقباطنة آليين قبل انتهاء العداد
+  useEffect(() => {
+    if (phase !== "lobby") return;
+    const free = SLOTS - realSeats.length;
+    const want = left <= 2
+      ? free
+      : Math.min(free - 1, Math.floor(((LOBBY_SECONDS - left) / LOBBY_SECONDS) * free * 0.9));
+
+    if (want > bots.length) {
+      setBots((cur) => {
+        const used = new Set([...realSeats, ...cur].map((s) => s.name));
+        const pool = BOT_NAMES.filter((n) => !used.has(n));
+        const add: Seat[] = [];
+        for (let i = cur.length; i < want; i++) {
+          add.push({
+            id: `bot-${i}`,
+            name: pool[i - cur.length] ?? `قبطان ${i + 1}`,
+            isBot: true,
+            avatar_index: (i * 3 + 1) % 10,
+            joined: Date.now(),
+          });
+        }
+        if (add.length) playSfx("click", 0.35);
+        return [...cur, ...add];
+      });
     }
+    if (left <= 0) launch();
+  }, [left, phase, realSeats.length]);
 
-    void launchBattle(seats);
+  const launchWithSeats = async (seatsList: RoyaleSeat[]) => {
+    if (launchedRef.current) return;
+    launchedRef.current = true;
+    playSfx("click", 1);
+    setPhase("loading");
+
+    try {
+      const html = await prepareGame();
+      const url = openGame(html, seatsList, myId);
+      if (blobRef.current) URL.revokeObjectURL(blobRef.current);
+      blobRef.current = url;
+      setGameUrl(url);
+      setPhase("game");
+    } catch (e) {
+      console.error("Game launch error:", e);
+      launchedRef.current = false;
+      setPhase("error");
+    }
   };
 
-  // Handle postMessage communication with game iframe
+  const launch = () => {
+    if (launchedRef.current) return;
+    const fullSeats: RoyaleSeat[] = [...realSeats, ...bots].slice(0, SLOTS).map((s) => ({
+      id: s.id,
+      name: s.name,
+      isBot: s.isBot,
+      me: !!s.me,
+      avatar_index: s.avatar_index,
+      avatar_url: s.avatar_url,
+    }));
+
+    // إبلاغ جميع لاعبي الغرفة لبدء القتال في اللحظة نفسها
+    try {
+      if (clientRef.current?.isJoinedToRoom?.()) {
+        clientRef.current.raiseEvent(KOS_EVENT_START, { seats: fullSeats }, { receivers: 0 });
+      }
+    } catch (e) {
+      console.warn("Failed to raise KOS_EVENT_START:", e);
+    }
+    void launchWithSeats(fullSeats);
+  };
+
+  // مزامنة الحركة والإصابات والانتقال إلى الجزيرة بين إطارات اللعبة
   useEffect(() => {
     if (phase !== "game" || !gameUrl) return;
 
@@ -305,23 +292,15 @@ export function KingOfSeas({ player, playerName, onClose }: { player?: Player | 
 
       if (data.type === "kos-state" && data.state) {
         if (clientRef.current?.isJoinedToRoom?.()) {
-          try {
-            clientRef.current.raiseEvent(
-              KOS_EVENT_STATE,
-              { id: myId, name: myName, state: data.state },
-              { receivers: 0 }
-            );
-          } catch {
-            // ignore packet drops
-          }
+          clientRef.current.raiseEvent(KOS_EVENT_STATE, { id: myId, name: myName, state: data.state }, { receivers: 0 });
         }
       } else if (data.type === "kos-hit" && data.hit) {
         if (clientRef.current?.isJoinedToRoom?.()) {
-          try {
-            clientRef.current.raiseEvent(KOS_EVENT_HIT, data.hit, { receivers: 0 });
-          } catch {
-            // ignore packet drops
-          }
+          clientRef.current.raiseEvent(KOS_EVENT_HIT, data.hit, { receivers: 0 });
+        }
+      } else if (data.type === "kos-trigger-island") {
+        if (clientRef.current?.isJoinedToRoom?.()) {
+          clientRef.current.raiseEvent(KOS_EVENT_ISLAND, {}, { receivers: 0 });
         }
       } else if (data.type === "kos-exit") {
         exit();
@@ -335,9 +314,7 @@ export function KingOfSeas({ player, playerName, onClose }: { player?: Player | 
   const exit = () => {
     if (clientRef.current) {
       try {
-        if (clientRef.current.isJoinedToRoom?.()) {
-          clientRef.current.leaveRoom();
-        }
+        if (clientRef.current.isJoinedToRoom?.()) clientRef.current.leaveRoom();
         clientRef.current.disconnect();
       } catch {
         // ignore
@@ -347,15 +324,8 @@ export function KingOfSeas({ player, playerName, onClose }: { player?: Player | 
     onClose();
   };
 
-  const header = useMemo(
-    () =>
-      phase === "game"
-        ? "معركة ملك البحار — مباشر"
-        : phase === "error"
-        ? "تعذّر تشغيل ملك البحار"
-        : "ملك البحار — شبكة فوتون",
-    [phase]
-  );
+  const seats = [...realSeats, ...bots].slice(0, SLOTS);
+  const ring = 2 * Math.PI * 44;
 
   return (
     <div className="kos-root" role="dialog" aria-label="ملك البحار">
@@ -367,61 +337,72 @@ export function KingOfSeas({ player, playerName, onClose }: { player?: Player | 
             src={gameUrl}
             title="ملك البحار — لعب حي"
             allow="autoplay; fullscreen"
+            onLoad={(e) => {
+              const w = e.currentTarget.contentWindow;
+              [400, 1200, 2500].forEach((ms) =>
+                window.setTimeout(() => w?.postMessage({ type: "kos-start" }, "*"), ms)
+              );
+            }}
           />
-          <button
-            type="button"
-            className="kos-exit"
-            onClick={exit}
-            aria-label="الخروج من المعركة"
-          >
+          <button type="button" className="kos-exit" onClick={exit} aria-label="الخروج من المعركة">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M6 6l12 12M18 6 6 18" /></svg>
             خروج
           </button>
         </>
       ) : (
         <div className="kos-lobby">
           <header className="kos-head">
-            <h2>{header}</h2>
-            <p>{message}</p>
+            <img src={crest} alt="" width={256} height={256} className="kos-head-crest" />
+            <h2>ملك البحار</h2>
+            <p>عشرة قباطنة في بحر واحد — يقاتلون التنين وبعضهم للانتقال إلى جزيرة المصير</p>
           </header>
+
           <div className="kos-versus">
             <div className="kos-hero">
-              <b>{myName}</b>
+              <CaptainAvatar seed={me.avatar_index ?? 0} url={me.avatar_url} className="kos-hero-img" />
+              <b>{me.name}</b>
               <em>قبطانك الحقيقي</em>
             </div>
-            <div className="kos-clock">
-              <span>{phase === "loading" ? "…" : seatCount}</span>
-              <small>{phase === "loading" ? "تجهيز البحر" : "لاعبون متصلون"}</small>
+            <div className="kos-clock" aria-live="polite">
+              <svg viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="44" className="kos-clock-bg" />
+                <circle cx="50" cy="50" r="44" className="kos-clock-fg" strokeDasharray={ring} strokeDashoffset={ring * (1 - left / LOBBY_SECONDS)} />
+              </svg>
+              <span>{phase === "loading" ? "…" : left}</span>
+              <small>{phase === "loading" ? "تجهيز البحر" : phase === "error" ? "تعذّر التحميل" : "تبدأ الحرب"}</small>
             </div>
             <div className="kos-hero kos-hero-foe">
-              <div className="kos-count-big">
-                {seatCount}
-                <small>/{SLOTS}</small>
-              </div>
-              <b>الغرفة المباشرة</b>
-              <em>سيرفرات Photon Realtime</em>
+              <div className="kos-count-big">{seats.length}<small>/{SLOTS}</small></div>
+              <b>قباطنة في الردهة</b>
+              <em>{humans.length ? `${humans.length + 1} لاعبين حقيقيين متصلين` : "بانتظار المنضمين عبر فوتون"}</em>
             </div>
           </div>
+
+          <ul className="kos-seats">
+            {Array.from({ length: SLOTS }, (_, i) => {
+              const s = seats[i];
+              return (
+                <li key={s?.id ?? `e${i}`} className={s ? (s.me ? "me" : s.isBot ? "bot" : "human") : "empty"}>
+                  {s ? (
+                    <>
+                      <CaptainAvatar seed={s.avatar_index ?? i} url={s.avatar_url} className="kos-seat-img" />
+                      <b>{s.name}</b>
+                      <em>{s.me ? "أنت" : s.isBot ? "قبطان آلي" : "لاعب حقيقي"}</em>
+                    </>
+                  ) : (
+                    <em>بانتظار قبطان…</em>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
           <div className="kos-foot">
-            <button type="button" className="kos-ghost" onClick={exit}>
-              مغادرة
-            </button>
+            <button type="button" className="kos-ghost" onClick={exit}>مغادرة</button>
             {phase === "error" ? (
-              <button
-                type="button"
-                className="kos-go"
-                onClick={() => window.location.reload()}
-              >
-                إعادة المحاولة
-              </button>
+              <button type="button" className="kos-go" onClick={launch}>إعادة المحاولة</button>
             ) : (
-              <button
-                type="button"
-                className="kos-go"
-                disabled={!connected || phase === "loading"}
-                onClick={handleStart}
-              >
-                ابدأ الآن
-              </button>
+              <button type="button" className="kos-go" disabled={phase === "loading"} onClick={launch}>ابدأ الآن</button>
             )}
           </div>
         </div>
