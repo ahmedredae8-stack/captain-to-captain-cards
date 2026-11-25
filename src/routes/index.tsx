@@ -223,6 +223,8 @@ function Index() {
       <div className="absolute inset-x-0 top-0 z-10 px-1 pt-[max(0.35rem,env(safe-area-inset-top))]">
         <TopHud
           name={player?.name ?? "قبطان"}
+          avatar={player?.avatar_index}
+          avatarUrl={player?.avatar_url}
           onAvatarClick={() => open("settings")}
           onGiftClick={() => setQuestsOpen(true)}
           onTopUp={() => { playSfx("click", 0.7); setShopOpen(true); }}
