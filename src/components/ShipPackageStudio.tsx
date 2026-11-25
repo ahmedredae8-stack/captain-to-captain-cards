@@ -1,402 +1,519 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ImagePlus, RefreshCw, Upload, AlertCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
-import { announceArtworkUpdate, artworkUrl, isArtworkAdmin, listArtwork } from "@/lib/artwork";
-import { fleetCatalog } from "@/lib/fleetCatalog";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronRight,
+  Flame,
+  Hammer,
+  Image as ImageIcon,
+  Loader2,
+  RefreshCw,
+  Scissors,
+  Shield,
+  Sparkles,
+  Upload,
+  X,
+  Zap,
+} from "lucide-react";
 
-type ShipRow = {
-  shipId: number;
-  code: string;
+import { supabase } from "@/integrations/supabase/client";
+import { announceArtworkUpdate, isArtworkAdmin } from "@/lib/artwork";
+import { playSfx } from "@/lib/sound";
+
+type EffectMode = "idle" | "damage" | "repair" | "destroy";
+
+type ExtractedShip = {
   name: string;
-  currentUrl: string;
+  blob: Blob;
   previewUrl: string;
-  file?: File;
+  width: number;
+  height: number;
 };
 
-const LEVEL_ONE_COUNT = 10;
-const ENGINE_URL = "/ship-effects/index.html";
-const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+/**
+ * خوارزمية ذكية مدمجة لحذف الخلفية (البيضاء أو الملونة) وتحويل الصورة إلى PNG شفاف بالكامل.
+ */
+async function removeBackgroundSmart(blob: Blob, tolerance = 35): Promise<Blob> {
+  const bmp = await createImageBitmap(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = bmp.width;
+  canvas.height = bmp.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return blob;
 
-function filenameToShipNumber(filename: string): number | null {
-  const base = filename.split("/").pop()?.toLowerCase() ?? "";
-  const ship = base.match(/^level_01_ship_(0[1-9])\.png$/);
-  if (ship) return Number(ship[1]);
-  if (base === "level_01_boss_10.png") return 10;
-  // فحص أي رقم في اسم الملف كبديل
-  const anyNum = base.match(/(\d+)/);
-  if (anyNum) {
-    const n = Number(anyNum[1]);
-    if (n >= 1 && n <= 10) return n;
+  ctx.drawImage(bmp, 0, 0);
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // فحص ألوان الأركان لتحديد لون الخلفية الغالب
+  const samples = [
+    [0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1],
+    [Math.floor(w / 2), 0], [0, Math.floor(h / 2)], [w - 1, Math.floor(h / 2)]
+  ];
+
+  let bgR = 0, bgG = 0, bgB = 0, count = 0;
+  for (const [x, y] of samples) {
+    const idx = (y * w + x) * 4;
+    if (data[idx + 3] > 30) {
+      bgR += data[idx];
+      bgG += data[idx + 1];
+      bgB += data[idx + 2];
+      count++;
+    }
   }
-  return null;
-}
 
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error("تعذرت قراءة صورة المعاينة"));
-    reader.readAsDataURL(blob);
+  if (count > 0) {
+    bgR = Math.round(bgR / count);
+    bgG = Math.round(bgG / count);
+    bgB = Math.round(bgB / count);
+  } else {
+    bgR = 255; bgG = 255; bgB = 255;
+  }
+
+  // حذف بكسلات الخلفية مع تنعيم حواف السفينة (feathering)
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3];
+    if (a < 10) continue;
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const dist = Math.sqrt((r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2);
+    if (dist <= tolerance) {
+      data[i + 3] = 0;
+    } else if (dist < tolerance + 16) {
+      const factor = (dist - tolerance) / 16;
+      data[i + 3] = Math.round(a * factor);
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+
+  return new Promise((resolve) => {
+    canvas.toBlob((b) => resolve(b ?? blob), "image/png");
   });
 }
 
-async function urlToDataUrl(url: string): Promise<string> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`تعذر تحميل صورة السفينة (${response.status})`);
-  return blobToDataUrl(await response.blob());
-}
+/**
+ * نافذة استوديو متكاملة لرفع حزم السفن وتطبيق التأثيرات الحية (تلميع، صيانة، ضرر، تفجير)
+ * تدعم الرفع المباشر لصور منفردة أو متعددة، وتدعم أيضاً ملفات ZIP المضغوطة، مع حذف الخلفية تلقائياً.
+ */
+export function ShipPackageStudio({ onClose }: { onClose?: () => void }) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
-export function ShipPackageStudio() {
-  const [ships, setShips] = useState<ShipRow[]>([]);
-  const [selectedId, setSelectedId] = useState(1);
-  const [engineHtml, setEngineHtml] = useState("");
-  const [previewHtml, setPreviewHtml] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
-  const [engineError, setEngineError] = useState<string | null>(null);
-  const multiFileInputRef = useRef<HTMLInputElement>(null);
-  const singleFileInputRef = useRef<HTMLInputElement>(null);
-  const objectUrlsRef = useRef<string[]>([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [loadingAdmin, setLoadingAdmin] = useState(true);
 
-  const levelShips = useMemo(() => fleetCatalog.slice(0, LEVEL_ONE_COUNT), []);
+  const [autoRemoveBg, setAutoRemoveBg] = useState(true);
+  const [ships, setShips] = useState<ExtractedShip[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [processing, setProcessing] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<{ text: string; type: "ok" | "err" | "info" } | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const response = await fetch(ENGINE_URL, { cache: "no-store" });
-        if (!response.ok) {
-          const fallbackResp = await fetch("/index.html", { cache: "no-store" });
-          if (!fallbackResp.ok) throw new Error("لم يُعثر على محرك التأثيرات في /ship-effects/index.html");
-          const fallbackHtml = await fallbackResp.text();
-          if (alive && fallbackHtml.includes("drawShipCondition")) {
-            setEngineHtml(fallbackHtml);
-            return;
-          }
-        }
-        const html = await response.text();
-        if (alive) setEngineHtml(html);
-      } catch (error) {
-        if (alive) setEngineError(error instanceof Error ? error.message : String(error));
-      }
-    })();
-
-    void (async () => {
-      try {
-        const rows = await listArtwork();
-        const latest = new Map<string, string>();
-        for (const row of rows) {
-          if (row.category === "ship" && row.pose === "idle" && !latest.has(row.subject)) {
-            latest.set(row.subject, row.image_path);
-          }
-        }
-        const items = await Promise.all(levelShips.map(async (ship, index) => {
-          const shipId = index + 1;
-          const storedPath = latest.get(`ship-${shipId}`);
-          let currentUrl = ship.hull;
-          if (storedPath) {
-            try { currentUrl = await artworkUrl(storedPath); } catch { /* الاحتفاظ بالصورة الافتراضية */ }
-          }
-          return {
-            shipId,
-            code: ship.code,
-            name: ship.name,
-            currentUrl,
-            previewUrl: currentUrl,
-          } satisfies ShipRow;
-        }));
-        if (alive) setShips(items);
-      } catch (error) {
-        if (alive) setStatus(`تعذر تحميل بيانات السفن الحالية: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    })();
-
-    return () => {
-      alive = false;
-      objectUrlsRef.current.forEach(URL.revokeObjectURL);
-      objectUrlsRef.current = [];
-    };
-  }, [levelShips]);
+  const [currentMode, setCurrentMode] = useState<EffectMode>("idle");
+  const [isEngineLoaded, setIsEngineLoaded] = useState(false);
 
   useEffect(() => {
-    let alive = true;
-    if (!engineHtml || ships.length === 0) return;
+    void isArtworkAdmin()
+      .then(setIsAdmin)
+      .finally(() => setLoadingAdmin(false));
+  }, []);
 
-    void (async () => {
-      try {
-        const imageData = await Promise.all(ships.map(async (ship) => {
-          if (ship.file) return blobToDataUrl(ship.file);
-          return urlToDataUrl(ship.currentUrl);
-        }));
+  const selectedShip = ships[selectedIndex] ?? null;
 
-        const sourceArray = /const shipSources=\[("data:image\/[^"]+")[\s\S]*?\];/;
-        if (!sourceArray.test(engineHtml)) throw new Error("تعذر العثور على قائمة الصور داخل محرك التأثيرات.");
-        let html = engineHtml.replace(sourceArray, (_match, originalShip: string) =>
-          `const shipSources=[${originalShip},${imageData.map((src) => JSON.stringify(src)).join(",")}];`,
-        );
-        const queryLine = "const query=new URLSearchParams(location.search);";
-        if (html.includes(queryLine)) {
-          html = html.replace(queryLine, `${queryLine}query.set('ship',${JSON.stringify(String(selectedId))});`);
-        }
-        if (alive) setPreviewHtml(html);
-      } catch (error) {
-        if (alive) setPreviewHtml("");
-        if (alive) setEngineError(error instanceof Error ? error.message : String(error));
-      }
-    })();
+  // إرسال صورة السفينة المختارة وحالة التأثير لمحرك Canvas
+  useEffect(() => {
+    if (!isEngineLoaded || !iframeRef.current || !selectedShip) return;
 
-    return () => { alive = false; };
-  }, [engineHtml, ships, selectedId]);
+    try {
+      iframeRef.current.contentWindow?.postMessage(
+        {
+          type: "SET_SHIP_IMAGE",
+          dataUrl: selectedShip.previewUrl,
+        },
+        "*"
+      );
+    } catch {
+      // إطار معزول
+    }
+  }, [isEngineLoaded, selectedShip]);
 
-  function handleMultipleImages(files: FileList | null) {
+  const applyEffect = (mode: EffectMode) => {
+    setCurrentMode(mode);
+    playSfx("click", 0.6);
+    if (!iframeRef.current) return;
+
+    try {
+      iframeRef.current.contentWindow?.postMessage(
+        {
+          type: "SET_EFFECT_MODE",
+          mode,
+        },
+        "*"
+      );
+    } catch {
+      // تجاهل
+    }
+  };
+
+  /** معالجة الملفات (سواء صور مباشرة أو ملف ZIP) */
+  const handleFilesChosen = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    setBusy(true);
-    setStatus("جارٍ ربط الصور المختارة بالسفن…");
+    setProcessing(true);
+    setStatusMsg(null);
+    playSfx("click", 0.7);
 
     try {
-      const fileList = Array.from(files);
-      const updated = ships.map((ship, idx) => {
-        let matched = fileList.find(f => filenameToShipNumber(f.name) === ship.shipId);
-        if (!matched && idx < fileList.length && fileList.length > 1) {
-          matched = fileList[idx];
+      const isZip = files.length === 1 && (files[0].name.endsWith(".zip") || files[0].type.includes("zip"));
+      const extracted: ExtractedShip[] = [];
+
+      if (isZip) {
+        // فك حزمة ZIP
+        if (typeof (window as any).JSZip === "undefined") {
+          await new Promise<void>((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error("تعذّر تحميل مكتبة فك الضغط JSZip"));
+            document.head.appendChild(script);
+          });
         }
-        if (!matched) return ship;
 
-        const objectUrl = URL.createObjectURL(matched);
-        objectUrlsRef.current.push(objectUrl);
-        return { ...ship, file: matched, previewUrl: objectUrl };
-      });
+        const zip = await (window as any).JSZip.loadAsync(files[0]);
+        const imageEntries: any[] = [];
 
-      setShips(updated);
-      setStatus(`تم تجهيز ${fileList.length} صورة بنجاح. عاين السفن ثم اضغط «نشر التحديث».`);
-    } catch (err) {
-      setStatus(`حدث خطأ أثناء معالجة الصور: ${err instanceof Error ? err.message : String(err)}`);
+        zip.forEach((path: string, entry: any) => {
+          if (!entry.dir && /\.(png|jpe?g|webp)$/i.test(path) && !path.includes("__MACOSX")) {
+            imageEntries.push(entry);
+          }
+        });
+
+        imageEntries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+        for (const entry of imageEntries) {
+          let blob = await entry.async("blob");
+          if (autoRemoveBg) {
+            blob = await removeBackgroundSmart(blob);
+          }
+          const previewUrl = URL.createObjectURL(blob);
+          const bmp = await createImageBitmap(blob);
+          extracted.push({
+            name: entry.name.split("/").pop() || entry.name,
+            blob,
+            previewUrl,
+            width: bmp.width,
+            height: bmp.height,
+          });
+        }
+      } else {
+        // رفع صور متعددة أو منفردة مباشرة
+        const fileArr = Array.from(files).filter((f) => /\.(png|jpe?g|webp)$/i.test(f.name));
+        fileArr.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+        for (const file of fileArr) {
+          let blob: Blob = file;
+          if (autoRemoveBg) {
+            blob = await removeBackgroundSmart(file);
+          }
+          const previewUrl = URL.createObjectURL(blob);
+          const bmp = await createImageBitmap(blob);
+          extracted.push({
+            name: file.name,
+            blob,
+            previewUrl,
+            width: bmp.width,
+            height: bmp.height,
+          });
+        }
+      }
+
+      if (extracted.length === 0) {
+        setStatusMsg({ text: "لم يتم العثور على صور سفن صالحة.", type: "err" });
+      } else {
+        setShips(extracted);
+        setSelectedIndex(0);
+        setStatusMsg({
+          text: `تم تجهيز ${extracted.length} سفينة بنجاح${autoRemoveBg ? " وإزالة خلفياتها" : ""}. جاهزة للمعاينة والنشر.`,
+          type: "ok",
+        });
+      }
+    } catch (e: any) {
+      setStatusMsg({ text: e.message || "حدث خطأ أثناء معالجة الملفات.", type: "err" });
     } finally {
-      setBusy(false);
-      if (multiFileInputRef.current) multiFileInputRef.current.value = "";
+      setProcessing(false);
     }
-  }
+  };
 
-  function handleSingleImage(file?: File) {
-    if (!file) return;
-    if (file.size > MAX_IMAGE_BYTES) {
-      setStatus("حجم الصورة أكبر من 25 ميجابايت.");
-      return;
-    }
-    const objectUrl = URL.createObjectURL(file);
-    objectUrlsRef.current.push(objectUrl);
-
-    setShips(prev => prev.map(s => s.shipId === selectedId ? { ...s, file, previewUrl: objectUrl } : s));
-    setStatus(`تم تحديث معاينة سفينة (${ships.find(s => s.shipId === selectedId)?.name ?? selectedId}) بنجاح. اضغط «نشر التحديث» لحفظها.`);
-    if (singleFileInputRef.current) singleFileInputRef.current.value = "";
-  }
-
-  async function publishUpdates() {
-    const staged = ships.filter((ship): ship is ShipRow & { file: File } => Boolean(ship.file));
-    if (staged.length === 0) {
-      setStatus("لا توجد صور جديدة جاهزة للنشر. اختر صوراً أولاً.");
-      return;
-    }
-
-    setBusy(true);
-    setStatus("جارٍ التحقق من صلاحيات الأدمن…");
+  /** رفع السفن الجاهزة إلى Supabase وتحديث قاعدة البيانات مباشرة */
+  const handleUploadAll = async () => {
+    if (ships.length === 0) return;
+    setUploading(true);
+    setStatusMsg({ text: "جاري التحقق من صلاحيات الأدمن والرفع إلى Supabase...", type: "info" });
+    playSfx("click", 0.7);
 
     try {
-      // 1. فحص تسجيل الدخول
-      const { data: authData } = await supabase.auth.getUser();
-      const user = authData?.user;
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
       if (!user) {
-        throw new Error("يجب تسجيل الدخول في اللعبة أولاً بحساب الأدمن قبل الرفع.");
+        throw new Error("يجب أن تكون مسجلاً بحسابك كأدمن لإتمام النشر.");
       }
 
-      // 2. فحص صلاحية الأدمن
-      const isAdmin = await isArtworkAdmin();
-      if (!isAdmin) {
-        throw new Error("حسابك لا يمتلك رتبة الأدمن (admin). تأكد من تفعيل صلاحية الأدمن لحسابك في جدول user_roles.");
-      }
+      let successCount = 0;
+      const targetSlot = "ship_idle";
 
-      setStatus(`جارٍ رفع وحفظ ${staged.length} سفينة…`);
-
-      for (const ship of staged) {
-        const ext = ship.file.name.split(".").pop()?.toLowerCase() || "png";
-        // المسار الإلزامي المطابق لسياسات Supabase RLS: user_id/filename
-        const fileName = `ship-${ship.shipId}-${Date.now()}.${ext}`;
+      for (let i = 0; i < ships.length; i++) {
+        const item = ships[i];
+        const fileName = `ship_${Date.now()}_${i}.png`;
         const storagePath = `${user.id}/${fileName}`;
 
-        // أ) رفع الملف إلى Storage
-        const uploadResult = await supabase.storage
+        const { error: uploadErr } = await supabase.storage
           .from("game-artwork")
-          .upload(storagePath, ship.file, {
-            contentType: ship.file.type || "image/png",
+          .upload(storagePath, item.blob, {
+            contentType: "image/png",
             upsert: true,
           });
 
-        if (uploadResult.error) {
-          throw new Error(`فشل رفع ملف ${ship.name}: ${uploadResult.error.message}`);
+        if (uploadErr) {
+          throw new Error(`فشل رفع الصورة (${item.name}): ${uploadErr.message}`);
         }
 
-        // ب) جلب السجلات القديمة لهذه السفينة لتنظيفها لاحقاً
-        const { data: oldRows } = await supabase
+        // تنظيف السجلات القديمة للسفينة
+        await supabase
           .from("artwork_poses")
-          .select("id, image_path")
-          .eq("category", "ship")
-          .eq("subject", `ship-${ship.shipId}`)
-          .eq("pose", "idle");
+          .delete()
+          .eq("slot", targetSlot)
+          .eq("variation_id", `custom_${i}`);
 
-        // ج) إدراج السجل الجديد ببيانات مطابقة لقواعد RLS
-        const { error: insertError } = await supabase
+        // إدراج سجل العمل الفني
+        const { error: insertErr } = await supabase
           .from("artwork_poses")
           .insert({
-            category: "ship",
-            subject: `ship-${ship.shipId}`,
-            pose: "idle",
+            slot: targetSlot,
+            variation_id: `custom_${i}`,
             image_path: storagePath,
+            source_file: item.name,
+            published: true,
             created_by: user.id,
           });
 
-        if (insertError) {
-          // التراجع عن الملف المرفوع إذا فشل حفظ قاعدة البيانات
-          await supabase.storage.from("game-artwork").remove([storagePath]);
-          throw new Error(`فشل حفظ سجل ${ship.name}: ${insertError.message}`);
+        if (insertErr) {
+          throw new Error(`فشل تسجيل السفينة بقاعدة البيانات: ${insertErr.message}`);
         }
 
-        // د) حذف السجلات والملفات القديمة في التخزين إن وجدت
-        if (oldRows && oldRows.length > 0) {
-          for (const old of oldRows) {
-            await supabase.from("artwork_poses").delete().eq("id", old.id);
-            await supabase.storage.from("game-artwork").remove([old.image_path]);
-          }
-        }
+        successCount++;
       }
 
       await announceArtworkUpdate();
 
-      setShips(prev => prev.map(s => s.file ? { ...s, currentUrl: s.previewUrl, file: undefined } : s));
-      setStatus(`تم نشر وتحديث ${staged.length} سفينة بنجاح! التحديث أصبح متاحاً باللعبة فوراً.`);
-    } catch (error) {
-      setStatus(`تعذر النشر: ${error instanceof Error ? error.message : String(error)}`);
+      setStatusMsg({
+        text: `تم بنجاح رفع وتثبيت ${successCount} سفينة في اللعبة! ستظهر لجميع اللاعبين فوراً.`,
+        type: "ok",
+      });
+      playSfx("click", 1);
+    } catch (err: any) {
+      setStatusMsg({ text: err.message || "فشل النشر.", type: "err" });
     } finally {
-      setBusy(false);
+      setUploading(false);
     }
-  }
-
-  const selectedShip = ships.find(s => s.shipId === selectedId) ?? ships[0];
-  const stagedCount = ships.filter(s => Boolean(s.file)).length;
+  };
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <header style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between", background: "#0b1d28", border: "1px solid rgba(246,194,75,.35)", borderRadius: 12, padding: 16 }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: 20, color: "#ffd36e" }}>استوديو رفع وتحديث السفن المباشر</h2>
-          <p style={{ margin: "4px 0 0", color: "#a9c1cc", fontSize: 13 }}>
-            ارفع صور PNG الشفافة مباشرة (سفينة بسفينة أو تحديد متعدد) وتطبيق التحديث باللعبة فورياً.
-          </p>
-        </div>
+    <div className="daily-overlay studio-overlay" dir="rtl" role="dialog" aria-modal="true">
+      <div className="daily-panel studio-panel max-w-4xl max-h-[92vh] flex flex-col p-4 bg-slate-900 border border-tos-gold/40 rounded-2xl shadow-2xl overflow-hidden">
+        {/* رأس النافذة */}
+        <header className="flex items-center justify-between pb-3 border-b border-slate-700/60">
+          <div className="flex items-center gap-2.5">
+            <Sparkles className="h-6 w-6 text-tos-gold" />
+            <div>
+              <h2 className="text-lg font-bold text-white leading-tight">استوديو حزم السفن والتأثيرات</h2>
+              <p className="text-xs text-slate-400">ارفع صور السفن (مباشرة أو ZIP) مع حذف الخلفية تلقائياً ومعاينة محرك المعارك</p>
+            </div>
+          </div>
+          {onClose && (
+            <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
+              <X className="h-5 w-5" />
+            </button>
+          )}
+        </header>
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <input
-            ref={multiFileInputRef}
-            type="file"
-            accept="image/png,image/webp,image/*"
-            multiple
-            hidden
-            onChange={(e) => handleMultipleImages(e.target.files)}
-          />
-          <Button variant="outline" disabled={busy} onClick={() => multiFileInputRef.current?.click()}>
-            <Upload style={{ width: 16, height: 16, marginLeft: 8 }} />
-            رفع عدة صور دفعة واحدة
-          </Button>
+        {/* تنبيه صلاحيات الأدمن */}
+        {!loadingAdmin && !isAdmin && (
+          <div className="mt-3 p-2.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>حسابك الحالي لا يملك صلاحية الأدمن. للمعاينة يمكنك التجربة، لكن النشر في قاعدة البيانات يتطلب حساب الأدمن.</span>
+          </div>
+        )}
 
-          <input
-            ref={singleFileInputRef}
-            type="file"
-            accept="image/png,image/webp,image/*"
-            hidden
-            onChange={(e) => handleSingleImage(e.target.files?.[0])}
-          />
-          <Button variant="secondary" disabled={busy} onClick={() => singleFileInputRef.current?.click()}>
-            <ImagePlus style={{ width: 16, height: 16, marginLeft: 8 }} />
-            رفع صورة للسفينة المختارة ({selectedShip?.name ?? selectedId})
-          </Button>
+        {/* خيارات الرفع وإزالة الخلفية */}
+        <div className="mt-3 p-3 bg-slate-800/60 border border-slate-700 rounded-xl flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              disabled={processing || uploading}
+              onClick={() => fileInputRef.current?.click()}
+              className="px-4 py-2 bg-tos-gold hover:brightness-110 text-slate-950 font-bold text-sm rounded-lg flex items-center gap-2 transition disabled:opacity-50"
+            >
+              {processing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              <span>اختيار صور السفن أو ملف ZIP</span>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/png,image/jpeg,image/webp,.zip,application/zip"
+              className="hidden"
+              onChange={(e) => void handleFilesChosen(e.target.files)}
+            />
 
-          <Button disabled={busy || stagedCount === 0} onClick={() => void publishUpdates()}>
-            {busy ? <RefreshCw className="animate-spin" style={{ width: 16, height: 16, marginLeft: 8 }} /> : <CheckCircle2 style={{ width: 16, height: 16, marginLeft: 8 }} />}
-            نشر التحديث ({stagedCount})
-          </Button>
-        </div>
-      </header>
-
-      {status && (
-        <div style={{ background: "#102a3a", border: "1px solid #355870", borderRadius: 8, padding: "10px 14px", color: "#e3f2fd", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
-          <AlertCircle style={{ width: 16, height: 16, flexShrink: 0 }} />
-          <span>{status}</span>
-        </div>
-      )}
-
-      {engineError && (
-        <div style={{ background: "#33161a", border: "1px solid #7f2632", borderRadius: 8, padding: "10px 14px", color: "#ffb4be", fontSize: 13 }}>
-          تنبيه المحرك: {engineError} (تأكد من وجود الملف في <code>public/ship-effects/index.html</code>)
-        </div>
-      )}
-
-      <div style={{ display: "grid", gridTemplateColumns: "300px minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
-        <aside style={{ background: "#0b1d28", border: "1px solid rgba(246,194,75,.2)", borderRadius: 12, padding: 12, display: "grid", gap: 8, maxHeight: 760, overflowY: "auto" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-            <span style={{ color: "#ffd36e", fontSize: 14, fontWeight: "bold" }}>سفن المستوى الأول</span>
-            <span style={{ color: "#8da6b5", fontSize: 12 }}>{stagedCount} معدلة</span>
+            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoRemoveBg}
+                onChange={(e) => setAutoRemoveBg(e.target.checked)}
+                className="rounded border-slate-600 text-tos-gold focus:ring-tos-gold"
+              />
+              <Scissors className="h-3.5 w-3.5 text-tos-gold" />
+              <span>إزالة الخلفية تلقائياً (شفافة PNG)</span>
+            </label>
           </div>
 
-          {ships.map((ship) => {
-            const isSelected = ship.shipId === selectedId;
-            const hasNew = Boolean(ship.file);
-            return (
-              <div
-                key={ship.shipId}
-                onClick={() => setSelectedId(ship.shipId)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: 8,
-                  borderRadius: 8,
-                  cursor: "pointer",
-                  background: isSelected ? "rgba(246,194,75,.15)" : "#07141d",
-                  border: isSelected ? "1px solid #ffd36e" : "1px solid #1a3242",
-                  transition: "all 0.15s ease",
-                }}
-              >
-                <div style={{ width: 44, height: 44, borderRadius: 6, background: "#0e2a3a", border: "1px solid #244458", display: "grid", placeItems: "center", overflow: "hidden", flexShrink: 0 }}>
-                  <img src={ship.previewUrl} alt={ship.name} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-                </div>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 13, color: isSelected ? "#fff" : "#cfe0ea", fontWeight: isSelected ? "bold" : "normal" }}>{ship.name}</span>
-                    {hasNew && <span style={{ fontSize: 11, background: "#1b4d3e", color: "#68d391", padding: "1px 6px", borderRadius: 4 }}>جديدة</span>}
-                  </div>
-                  <span style={{ fontSize: 11, color: "#718b99" }}>رقم: {ship.shipId}</span>
-                </div>
-              </div>
-            );
-          })}
-        </aside>
-
-        <div style={{ minWidth: 0, background: "#061520", borderRadius: 12, padding: 12 }}>
-          {previewHtml ? (
-            <iframe
-              title="معاينة محرك تأثيرات السفن"
-              sandbox="allow-scripts"
-              srcDoc={previewHtml}
-              style={{ display: "block", width: "100%", height: 720, border: 0, borderRadius: 10, background: "#0e2a3a" }}
-            />
-          ) : (
-            <div style={{ minHeight: 320, display: "grid", placeItems: "center", color: "#a9c1cc" }}>
-              جارٍ تجهيز معاينة التأثيرات…
-            </div>
+          {ships.length > 0 && (
+            <button
+              type="button"
+              disabled={uploading || !isAdmin}
+              onClick={handleUploadAll}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-lg flex items-center gap-2 transition disabled:opacity-50"
+            >
+              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              <span>نشر كل السفن باللعبة ({ships.length})</span>
+            </button>
           )}
-          <p style={{ margin: "8px 4px 0", color: "#91aab7", fontSize: 12 }}>
-            المعاينة الحية تعرض محرك التأثيرات: اللمعة، الإصلاح وإعادة التجميع، وتفتت الخشب والنيران عند التدمير.
-          </p>
+        </div>
+
+        {/* رسائل الحالة */}
+        {statusMsg && (
+          <div
+            className={`mt-2 p-2.5 rounded-lg text-xs flex items-center gap-2 border ${
+              statusMsg.type === "ok"
+                ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-200"
+                : statusMsg.type === "err"
+                ? "bg-rose-500/15 border-rose-500/40 text-rose-200"
+                : "bg-sky-500/15 border-sky-500/40 text-sky-200"
+            }`}
+          >
+            <span>{statusMsg.text}</span>
+          </div>
+        )}
+
+        {/* المعاينة الحية وشريط السفن */}
+        <div className="mt-3 flex-1 grid grid-cols-1 md:grid-cols-3 gap-3 min-h-0">
+          {/* محرك التأثيرات (IFrame) */}
+          <div className="md:col-span-2 relative bg-slate-950 border border-slate-700 rounded-xl overflow-hidden flex flex-col">
+            <div className="p-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <ImageIcon className="h-3.5 w-3.5 text-tos-gold" />
+                <span>معاينة المحرك: {selectedShip ? selectedShip.name : "لا توجد سفينة محددة"}</span>
+              </span>
+
+              {/* أزرار اختبار التأثيرات */}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => applyEffect("idle")}
+                  className={`px-2 py-1 text-xs rounded transition flex items-center gap-1 ${
+                    currentMode === "idle" ? "bg-tos-gold text-slate-950 font-bold" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                  }`}
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span>طبيعي</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyEffect("repair")}
+                  className={`px-2 py-1 text-xs rounded transition flex items-center gap-1 ${
+                    currentMode === "repair" ? "bg-emerald-500 text-white font-bold" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                  }`}
+                >
+                  <Hammer className="h-3 w-3" />
+                  <span>إصلاح</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyEffect("damage")}
+                  className={`px-2 py-1 text-xs rounded transition flex items-center gap-1 ${
+                    currentMode === "damage" ? "bg-amber-500 text-slate-950 font-bold" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                  }`}
+                >
+                  <Flame className="h-3 w-3" />
+                  <span>ضرر</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyEffect("destroy")}
+                  className={`px-2 py-1 text-xs rounded transition flex items-center gap-1 ${
+                    currentMode === "destroy" ? "bg-rose-600 text-white font-bold" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                  }`}
+                >
+                  <Zap className="h-3 w-3" />
+                  <span>تدمير</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 relative w-full h-[320px] md:h-auto min-h-[300px] bg-slate-950">
+              <iframe
+                ref={iframeRef}
+                src="/ship-effects/index.html"
+                title="Ship Effects Canvas Engine"
+                className="w-full h-full border-0"
+                onLoad={() => setIsEngineLoaded(true)}
+              />
+            </div>
+          </div>
+
+          {/* قائمة السفن المرفوعة */}
+          <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-2.5 flex flex-col min-h-0">
+            <span className="text-xs font-bold text-slate-300 mb-2 block">السفن الجاهزة ({ships.length})</span>
+            {ships.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-slate-500 text-xs">
+                <Upload className="h-8 w-8 mb-2 opacity-40" />
+                <p>لم تختر سفناً بعد.</p>
+                <p className="mt-1 text-[11px] text-slate-600">اختر صور PNG أو JPG أو ملف ZIP لبدء التجربة.</p>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                {ships.map((s, idx) => (
+                  <button
+                    key={s.name + idx}
+                    type="button"
+                    onClick={() => {
+                      setSelectedIndex(idx);
+                      playSfx("hover", 0.3);
+                    }}
+                    className={`w-full p-2 rounded-lg flex items-center gap-2.5 transition text-right ${
+                      selectedIndex === idx
+                        ? "bg-slate-800 border border-tos-gold/60 text-white"
+                        : "bg-slate-900/50 hover:bg-slate-800/40 text-slate-400 border border-transparent"
+                    }`}
+                  >
+                    <div className="w-10 h-10 rounded bg-slate-950 border border-slate-700 p-0.5 flex items-center justify-center shrink-0 overflow-hidden">
+                      <img src={s.previewUrl} alt="" className="max-w-full max-h-full object-contain" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold truncate text-white">{s.name}</p>
+                      <p className="text-[10px] text-slate-500">
+                        {s.width} × {s.height} px
+                      </p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-slate-500" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
