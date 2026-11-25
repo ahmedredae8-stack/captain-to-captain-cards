@@ -1,30 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-declare global {
-  interface Window {
-    JSZip?: any;
-  }
-}
-
-async function loadJSZip(): Promise<any> {
-  if (typeof window !== "undefined" && window.JSZip) {
-    return window.JSZip;
-  }
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector("script[src*=\"jszip\"]");
-    if (existing) {
-      existing.addEventListener("load", () => resolve((window as any).JSZip));
-      existing.addEventListener("error", () => reject(new Error("تعذر تحميل مكتبة فك الضغط")));
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
-    script.async = true;
-    script.onload = () => resolve((window as any).JSZip);
-    script.onerror = () => reject(new Error("تعذر تحميل مكتبة فك الضغط من السيرفر السحابي (CDN)"));
-    document.head.appendChild(script);
-  });
-}
-import { CheckCircle2, FileArchive, RefreshCw, Upload } from "lucide-react";
+import { CheckCircle2, ImagePlus, RefreshCw, Upload, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { announceArtworkUpdate, artworkUrl, listArtwork } from "@/lib/artwork";
@@ -41,7 +16,6 @@ type ShipRow = {
 
 const LEVEL_ONE_COUNT = 10;
 const ENGINE_URL = "/ship-effects/index.html";
-const MAX_ZIP_BYTES = 100 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 function filenameToShipNumber(filename: string): number | null {
@@ -49,6 +23,12 @@ function filenameToShipNumber(filename: string): number | null {
   const ship = base.match(/^level_01_ship_(0[1-9])\.png$/);
   if (ship) return Number(ship[1]);
   if (base === "level_01_boss_10.png") return 10;
+  // Fallback: check any number in filename like ship_1 or 01
+  const anyNum = base.match(/(\d+)/);
+  if (anyNum) {
+    const n = Number(anyNum[1]);
+    if (n >= 1 && n <= 10) return n;
+  }
   return null;
 }
 
@@ -75,22 +55,28 @@ export function ShipPackageStudio() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [engineError, setEngineError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const multiFileInputRef = useRef<HTMLInputElement>(null);
+  const singleFileInputRef = useRef<HTMLInputElement>(null);
   const objectUrlsRef = useRef<string[]>([]);
 
   const levelShips = useMemo(() => fleetCatalog.slice(0, LEVEL_ONE_COUNT), []);
-  const selectedShip = ships.find((ship) => ship.shipId === selectedId) ?? ships[0];
 
   useEffect(() => {
     let alive = true;
     void (async () => {
       try {
         const response = await fetch(ENGINE_URL, { cache: "no-store" });
-        if (!response.ok) throw new Error(`لم يُعثر على محرك التأثيرات (${ENGINE_URL})`);
-        const html = await response.text();
-        if (!html.includes("const shipSources=[") || !html.includes("drawShipCondition")) {
-          throw new Error("ملف المعاينة ليس نسخة محرك التأثيرات المرفق كاملة.");
+        if (!response.ok) {
+          // Fallback to /index.html if user placed it at root
+          const fallbackResp = await fetch("/index.html", { cache: "no-store" });
+          if (!fallbackResp.ok) throw new Error("لم يُعثر على محرك التأثيرات في /ship-effects/index.html");
+          const fallbackHtml = await fallbackResp.text();
+          if (alive && fallbackHtml.includes("drawShipCondition")) {
+            setEngineHtml(fallbackHtml);
+            return;
+          }
         }
+        const html = await response.text();
         if (alive) setEngineHtml(html);
       } catch (error) {
         if (alive) setEngineError(error instanceof Error ? error.message : String(error));
@@ -145,16 +131,15 @@ export function ShipPackageStudio() {
           return urlToDataUrl(ship.currentUrl);
         }));
 
-        // Keep the original golden ship image at index 0. Replace only the ten
-        // level-one entries, so the attached engine remains the source of effects.
         const sourceArray = /const shipSources=\[("data:image\/[^"]+")[\s\S]*?\];/;
         if (!sourceArray.test(engineHtml)) throw new Error("تعذر العثور على قائمة الصور داخل محرك التأثيرات.");
         let html = engineHtml.replace(sourceArray, (_match, originalShip: string) =>
           `const shipSources=[${originalShip},${imageData.map((src) => JSON.stringify(src)).join(",")}];`,
         );
         const queryLine = "const query=new URLSearchParams(location.search);";
-        if (!html.includes(queryLine)) throw new Error("تعذر ضبط السفينة المختارة في المعاينة.");
-        html = html.replace(queryLine, `${queryLine}query.set('ship',${JSON.stringify(String(selectedId))});`);
+        if (html.includes(queryLine)) {
+          html = html.replace(queryLine, `${queryLine}query.set('ship',${JSON.stringify(String(selectedId))});`);
+        }
         if (alive) setPreviewHtml(html);
       } catch (error) {
         if (alive) setPreviewHtml("");
@@ -165,147 +150,226 @@ export function ShipPackageStudio() {
     return () => { alive = false; };
   }, [engineHtml, ships, selectedId]);
 
-  async function importZip(file?: File) {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".zip")) {
-      setStatus("اختر ملف ZIP للحزمة.");
-      return;
-    }
-    if (file.size > MAX_ZIP_BYTES) {
-      setStatus("حجم ملف ZIP أكبر من الحد المسموح (100 ميجابايت).");
-      return;
-    }
-
+  // Handle uploading multiple PNG files
+  function handleMultipleImages(files: FileList | null) {
+    if (!files || files.length === 0) return;
     setBusy(true);
-    setStatus("جارٍ قراءة الحزمة والبحث عن صور المستوى الأول…");
-    try {
-      const JSZipLib = await loadJSZip();
-      const zip = await JSZipLib.loadAsync(file);
-      const found = new Map<number, File>();
-      let totalBytes = 0;
-      for (const [path, entry] of Object.entries(zip.files)) {
-        if (entry.dir) continue;
-        const shipNumber = filenameToShipNumber(path);
-        if (!shipNumber) continue;
-        const blob = await entry.async("blob");
-        totalBytes += blob.size;
-        if (blob.size > MAX_IMAGE_BYTES || totalBytes > 80 * 1024 * 1024) {
-          throw new Error("صور ZIP أكبر من الحد المسموح.");
-        }
-        const name = path.split("/").pop()!;
-        found.set(shipNumber, new File([blob], name, { type: "image/png" }));
-      }
-      if (found.size === 0) {
-        throw new Error("لم أجد صور level_01_ship_01.png إلى level_01_ship_09.png وlevel_01_boss_10.png داخل ZIP.");
-      }
+    setStatus("جارٍ ربط الصور المختارة بالسفن…");
 
-      const next = ships.map((ship) => {
-        const fileFromZip = found.get(ship.shipId);
-        if (!fileFromZip) return ship;
-        const objectUrl = URL.createObjectURL(fileFromZip);
+    try {
+      const fileList = Array.from(files);
+      const updated = ships.map((ship, idx) => {
+        // Try matching by filename first
+        let matched = fileList.find(f => filenameToShipNumber(f.name) === ship.shipId);
+        // Fallback: match by index if names dont match
+        if (!matched && idx < fileList.length && fileList.length > 1) {
+          matched = fileList[idx];
+        }
+        if (!matched) return ship;
+
+        const objectUrl = URL.createObjectURL(matched);
         objectUrlsRef.current.push(objectUrl);
-        return { ...ship, file: fileFromZip, previewUrl: objectUrl };
+        return { ...ship, file: matched, previewUrl: objectUrl };
       });
-      setShips(next);
-      const missing = Array.from({ length: LEVEL_ONE_COUNT }, (_, i) => i + 1).filter((n) => !found.has(n));
-      setStatus(missing.length
-        ? `تم استيراد ${found.size} صورة. بقيت الأرقام ${missing.join("، ")} من الحزمة الحالية كما هي؛ لن تُستبدل عند النشر.`
-        : "تم استيراد سفن المستوى الأول التسع والزعيم. اختر سفينة لمعاينتها، ثم انشر عند الاستعداد.");
-    } catch (error) {
-      setStatus(`تعذر فتح الحزمة: ${error instanceof Error ? error.message : String(error)}`);
+
+      setShips(updated);
+      setStatus(`تم تجهيز ${fileList.length} صورة بنجاح. عاين السفن ثم اضغط «نشر التحديث».`);
+    } catch (err) {
+      setStatus(`حدث خطأ أثناء معالجة الصور: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setBusy(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (multiFileInputRef.current) multiFileInputRef.current.value = "";
     }
+  }
+
+  // Handle uploading single PNG for the currently selected ship
+  function handleSingleImage(file?: File) {
+    if (!file) return;
+    if (file.size > MAX_IMAGE_BYTES) {
+      setStatus("حجم الصورة أكبر من 25 ميجابايت.");
+      return;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    objectUrlsRef.current.push(objectUrl);
+
+    setShips(prev => prev.map(s => s.shipId === selectedId ? { ...s, file, previewUrl: objectUrl } : s));
+    setStatus(`تم تحديث معاينة سفينة (${ships.find(s => s.shipId === selectedId)?.name ?? selectedId}) بنجاح. اضغط «نشر التحديث» لحفظها.`);
+    if (singleFileInputRef.current) singleFileInputRef.current.value = "";
   }
 
   async function publishUpdates() {
-    const staged = ships.filter((ship) => ship.file);
-    if (!staged.length) {
-      setStatus("لا توجد صور جديدة جاهزة للنشر. ارفع ZIP أولاً.");
+    const staged = ships.filter((ship): ship is ShipRow & { file: File } => Boolean(ship.file));
+    if (staged.length === 0) {
+      setStatus("لا توجد صور جديدة جاهزة للنشر. اختر صوراً أولاً.");
       return;
     }
+
     setBusy(true);
-    setStatus("جارٍ رفع الصور وتحديث سجلات السفن…");
+    setStatus("جارٍ نشر الصور إلى مساحة التخزين وحفظ الأوضاع…");
+
     try {
-      const { data: authData, error: authError } = await supabase.auth.getUser();
-      if (authError) throw authError;
-      if (!authData.user) throw new Error("سجّل الدخول بحساب المشرف أولاً.");
-
       for (const ship of staged) {
-        if (!ship.file) continue;
-        const path = `ships/level-01/ship-${ship.shipId}-${Date.now()}.png`;
-        const { error: uploadError } = await supabase.storage.from("game-artwork").upload(path, ship.file, {
-          contentType: "image/png",
-          upsert: true,
-        });
-        if (uploadError) throw uploadError;
+        const ext = ship.file.name.split(".").pop()?.toLowerCase() || "png";
+        const storagePath = `ships/ship-${ship.shipId}/idle-${Date.now()}.${ext}`;
 
-        const subject = `ship-${ship.shipId}`;
-        const { error: deleteError } = await supabase.from("artwork_poses")
-          .delete().eq("category", "ship").eq("subject", subject).eq("pose", "idle");
-        if (deleteError) throw deleteError;
-        const { error: insertError } = await supabase.from("artwork_poses").insert({
-          category: "ship",
-          subject,
-          pose: "idle",
-          image_path: path,
-          created_by: authData.user.id,
-        });
-        if (insertError) throw insertError;
+        const uploadResult = await supabase.storage
+          .from("game-artwork")
+          .upload(storagePath, ship.file, {
+            contentType: ship.file.type || "image/png",
+            upsert: true,
+          });
+
+        if (uploadResult.error) {
+          throw new Error(`فشل رفع ${ship.name}: ${uploadResult.error.message}`);
+        }
+
+        const { error: dbError } = await supabase.from("artwork_poses").upsert(
+          {
+            category: "ship",
+            subject: `ship-${ship.shipId}`,
+            pose: "idle",
+            image_path: storagePath,
+            credit: "محرر حزم السفن",
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "category,subject,pose" },
+        );
+
+        if (dbError) {
+          throw new Error(`فشل حفظ بيانات ${ship.name}: ${dbError.message}`);
+        }
       }
 
-      announceArtworkUpdate();
-      setShips((current) => current.map((ship) => ship.file ? { ...ship, file: undefined, currentUrl: ship.previewUrl } : ship));
-      setStatus(`تم نشر ${staged.length} صورة للمستوى الأول. ستُحدّث صور السفن المتصلة بهذه السجلات بعد وصول إشعار التحديث.`);
+      await announceArtworkUpdate();
+
+      setShips(prev => prev.map(s => s.file ? { ...s, currentUrl: s.previewUrl, file: undefined } : s));
+      setStatus(`تم نشر ${staged.length} سفينة بنجاح! التحديث أصبح سارياً فوراً.`);
     } catch (error) {
-      setStatus(`فشل النشر: ${error instanceof Error ? error.message : String(error)}`);
+      setStatus(`تعذر النشر: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setBusy(false);
     }
   }
 
+  const selectedShip = ships.find(s => s.shipId === selectedId) ?? ships[0];
+  const stagedCount = ships.filter(s => Boolean(s.file)).length;
+
   return (
-    <section dir="rtl" style={{ background: "#0b1f2d", color: "#fff", borderRadius: 16, padding: 20, marginTop: 16 }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+    <div style={{ display: "grid", gap: 16 }}>
+      <header style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between", background: "#0b1d28", border: "1px solid rgba(246,194,75,.35)", borderRadius: 12, padding: 16 }}>
         <div>
-          <h2 style={{ margin: 0, color: "#ffd36e", fontSize: 20 }}>حزم السفن — المستوى الأول</h2>
-          <p style={{ margin: "5px 0 0", color: "#a9c1cc", fontSize: 13 }}>ارفع ZIP كما هو، وعاين السفن بمحرك التأثيرات الأصلي المرفق.</p>
+          <h2 style={{ margin: 0, fontSize: 20, color: "#ffd36e" }}>استوديو رفع وتحديث السفن المباشر</h2>
+          <p style={{ margin: "4px 0 0", color: "#a9c1cc", fontSize: 13 }}>
+            ارفع صور PNG الشفافة مباشرة (سفينة بسفينة أو تحديد متعدد) بدون الحاجة لملفات مضغوطة وبدون استهلاك للذاكرة.
+          </p>
         </div>
+
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <input ref={fileInputRef} type="file" accept=".zip,application/zip" hidden onChange={(event) => void importZip(event.target.files?.[0])} />
-          <Button variant="outline" disabled={busy} onClick={() => fileInputRef.current?.click()}>
-            <FileArchive size={16} style={{ marginLeft: 6 }} /> اختر ZIP
+          {/* Multi-file input */}
+          <input
+            ref={multiFileInputRef}
+            type="file"
+            accept="image/png,image/webp,image/*"
+            multiple
+            hidden
+            onChange={(e) => handleMultipleImages(e.target.files)}
+          />
+          <Button variant="outline" disabled={busy} onClick={() => multiFileInputRef.current?.click()}>
+            <Upload style={{ width: 16, height: 16, marginLeft: 8 }} />
+            رفع عدة صور دفعة واحدة
           </Button>
-          <Button disabled={busy || !ships.some((ship) => ship.file)} onClick={() => void publishUpdates()} style={{ background: "linear-gradient(135deg,#f4d18a,#d5a344)", color: "#231604", fontWeight: 700 }}>
-            <RefreshCw size={16} className={busy ? "animate-spin" : ""} style={{ marginLeft: 6 }} />
-            {busy ? "جارٍ العمل…" : "نشر التحديث"}
+
+          {/* Single-file input for selected ship */}
+          <input
+            ref={singleFileInputRef}
+            type="file"
+            accept="image/png,image/webp,image/*"
+            hidden
+            onChange={(e) => handleSingleImage(e.target.files?.[0])}
+          />
+          <Button variant="secondary" disabled={busy} onClick={() => singleFileInputRef.current?.click()}>
+            <ImagePlus style={{ width: 16, height: 16, marginLeft: 8 }} />
+            رفع صورة للسفينة المختارة ({selectedShip?.name ?? selectedId})
+          </Button>
+
+          <Button disabled={busy || stagedCount === 0} onClick={() => void publishUpdates()}>
+            {busy ? <RefreshCw className="animate-spin" style={{ width: 16, height: 16, marginLeft: 8 }} /> : <CheckCircle2 style={{ width: 16, height: 16, marginLeft: 8 }} />}
+            نشر التحديث ({stagedCount})
           </Button>
         </div>
       </header>
 
-      {status && <p role="status" style={{ background: "rgba(255,255,255,.08)", padding: 10, borderRadius: 8, lineHeight: 1.7 }}>{status}</p>}
-      {engineError && <p role="alert" style={{ color: "#ffb4a9", lineHeight: 1.7 }}>المعاينة: {engineError}. تأكد من وضع ملف index.html المرفق في public/ship-effects/index.html.</p>}
+      {status && (
+        <div style={{ background: "#102a3a", border: "1px solid #355870", borderRadius: 8, padding: "10px 14px", color: "#e3f2fd", fontSize: 13 }}>
+          {status}
+        </div>
+      )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,260px) minmax(0,1fr)", gap: 14, marginTop: 14 }}>
-        <aside style={{ background: "#061520", borderRadius: 12, padding: 12, maxHeight: 700, overflow: "auto" }}>
-          <h3 style={{ margin: "0 0 10px", color: "#bfd4dd", fontSize: 14 }}>سفن الحزمة ({ships.length}/10)</h3>
-          {ships.map((ship) => (
-            <button key={ship.shipId} type="button" onClick={() => setSelectedId(ship.shipId)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 9, textAlign: "right", padding: 8, marginBottom: 5, color: "white", cursor: "pointer", borderRadius: 8, border: ship.shipId === selectedId ? "1px solid #ffd36e" : "1px solid rgba(255,255,255,.08)", background: ship.shipId === selectedId ? "rgba(255,211,110,.12)" : "transparent" }}>
-              <img src={ship.previewUrl} alt="" style={{ width: 42, height: 42, objectFit: "contain" }} />
-              <span style={{ flex: 1, minWidth: 0 }}><b style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ship.shipId === 10 ? "زعيم المستوى الأول" : `سفينة ${String(ship.shipId).padStart(2, "0")}`}</b><small style={{ color: "#91aab7" }}>{ship.name} · {ship.code}</small></span>
-              {ship.file && <CheckCircle2 size={16} color="#4ade80" />}
-            </button>
-          ))}
-          <p style={{ color: "#91aab7", fontSize: 12, lineHeight: 1.7 }}>المطابقة حسب أسماء PNG داخل ZIP: level_01_ship_01 إلى 09 وlevel_01_boss_10. الترتيب يربطها بأول 10 سفن في كتالوج اللعبة.</p>
+      {engineError && (
+        <div style={{ background: "#33161a", border: "1px solid #7f2632", borderRadius: 8, padding: "10px 14px", color: "#ffb4be", fontSize: 13 }}>
+          تنبيه المحرك: {engineError} (تأكد من وجود الملف في <code>public/ship-effects/index.html</code> أو <code>public/index.html</code>)
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "300px minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
+        <aside style={{ background: "#0b1d28", border: "1px solid rgba(246,194,75,.2)", borderRadius: 12, padding: 12, display: "grid", gap: 8, maxHeight: 760, overflowY: "auto" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <span style={{ color: "#ffd36e", fontSize: 14, fontWeight: "bold" }}>سفن المستوى الأول</span>
+            <span style={{ color: "#8da6b5", fontSize: 12 }}>{stagedCount} معدلة</span>
+          </div>
+
+          {ships.map((ship) => {
+            const isSelected = ship.shipId === selectedId;
+            const hasNew = Boolean(ship.file);
+            return (
+              <div
+                key={ship.shipId}
+                onClick={() => setSelectedId(ship.shipId)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: 8,
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  background: isSelected ? "rgba(246,194,75,.15)" : "#07141d",
+                  border: isSelected ? "1px solid #ffd36e" : "1px solid #1a3242",
+                  transition: "all 0.15s ease",
+                }}
+              >
+                <div style={{ width: 44, height: 44, borderRadius: 6, background: "#0e2a3a", border: "1px solid #244458", display: "grid", placeItems: "center", overflow: "hidden", flexShrink: 0 }}>
+                  <img src={ship.previewUrl} alt={ship.name} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontSize: 13, color: isSelected ? "#fff" : "#cfe0ea", fontWeight: isSelected ? "bold" : "normal" }}>{ship.name}</span>
+                    {hasNew && <span style={{ fontSize: 11, background: "#1b4d3e", color: "#68d391", padding: "1px 6px", borderRadius: 4 }}>جديدة</span>}
+                  </div>
+                  <span style={{ fontSize: 11, color: "#718b99" }}>رقم: {ship.shipId}</span>
+                </div>
+              </div>
+            );
+          })}
         </aside>
 
         <div style={{ minWidth: 0, background: "#061520", borderRadius: 12, padding: 12 }}>
-          {previewHtml ? <iframe title="معاينة محرك تأثيرات السفن" sandbox="allow-scripts" srcDoc={previewHtml} style={{ display: "block", width: "100%", height: 720, border: 0, borderRadius: 10, background: "#0e2a3a" }} /> : <div style={{ minHeight: 320, display: "grid", placeItems: "center", color: "#a9c1cc" }}>جارٍ تجهيز معاينة التأثيرات…</div>}
-          <p style={{ margin: "8px 4px 0", color: "#91aab7", fontSize: 12 }}>المعاينة تعرض محرك التأثيرات الأصلي: اللمعة، الإصلاح وإعادة التجميع، الضرر، والتدمير. قد يتطلب التحميل الأول بضع ثوانٍ لأن الصور تُجهّز للمعاينة.</p>
-          {selectedShip && <p style={{ margin: "6px 4px 0", color: "#ffd36e", fontSize: 12 }}>المختار: {selectedShip.shipId === 10 ? "زعيم المستوى الأول" : `السفينة ${selectedShip.shipId}`} — {selectedShip.name}</p>}
+          {previewHtml ? (
+            <iframe
+              title="معاينة محرك تأثيرات السفن"
+              sandbox="allow-scripts"
+              srcDoc={previewHtml}
+              style={{ display: "block", width: "100%", height: 720, border: 0, borderRadius: 10, background: "#0e2a3a" }}
+            />
+          ) : (
+            <div style={{ minHeight: 320, display: "grid", placeItems: "center", color: "#a9c1cc" }}>
+              جارٍ تجهيز معاينة التأثيرات…
+            </div>
+          )}
+          <p style={{ margin: "8px 4px 0", color: "#91aab7", fontSize: 12 }}>
+            المعاينة الحية تعرض محرك التأثيرات بكامل قوته: اللمعة، الإصلاح وإعادة التجميع، وتفتت الخشب والنيران عند التدمير.
+          </p>
         </div>
       </div>
-    </section>
+    </div>
   );
 }
