@@ -1,86 +1,81 @@
 import { useEffect, useRef, useState } from "react";
+import { Anchor, Sparkles } from "lucide-react";
 
-import { playSfx } from "@/lib/sound";
-import introArt from "@/assets/intro-epic.jpg";
-import { hulls, fleetCatalog } from "@/lib/fleetCatalog";
-import { FISH } from "@/lib/catches";
-import { themes } from "@/lib/themes";
-import { listArtwork, artworkUrl } from "@/lib/artwork";
+import { artworkUrl, listArtwork } from "@/lib/artwork";
+import { playAmbient, playSfx } from "@/lib/sound";
 
 const STAGES = [
-  "تجهيز الأسطول والمدافع",
-  "جلب سفن وتأثيرات السحابة",
-  "صلي علي النبي",
-  "رسم خرائط ومياه المحيط",
-  "تحميل قمرة القيادة والعتاد",
-  "رفع راية المعركة",
+  "نجهّز أشرعة السفن...",
+  "نضبط مدافع المعركة...",
+  "نستطلع حركة الرياح والأمواج...",
+  "نجمع كنوز الجزيرة...",
+  "نستقبل قبطان البحر...",
 ];
 
-// جلب كافة الأصول والصور المضمنة في مجلد assets تلقائياً (البطاقات، الشخصيات، الأيقونات، السفن، الدروع)
-const bundledImages = Object.values(
-  import.meta.glob("@/assets/**/*.{png,jpg,jpeg,webp}", { eager: true, import: "default" })
-) as string[];
+/** وقت أدنى لضمان رؤية الهوية بسلاسة (ثانية واحدة) */
+const MIN_TIME = 1000;
 
-/** جمع كافة الصور الثابتة التي تحتاجها اللعبة عند البداية */
-function baseCriticalImages(): string[] {
-  const list = [
-    ...bundledImages,
-    ...themes.flatMap((t) => [t.day.poster, t.night.poster]),
-    ...hulls,
-    ...fleetCatalog.map((s) => s.hull),
-    ...fleetCatalog.map((s) => s.photo),
-    ...FISH.map((f) => f.img),
-  ];
-  return [...new Set(list.filter(Boolean))];
-}
-
+/** فحص وتحميل أي صورة في الذاكرة */
 function preloadImage(src: string): Promise<void> {
-  return new Promise<void>((resolve) => {
+  return new Promise((resolve) => {
+    if (!src) return resolve();
     const img = new Image();
-    img.decoding = "async";
-    img.onload = () => {
-      // التأكد من فك تشفير الصورة في ذاكرة المتصفح
-      if ("decode" in img) {
-        img.decode().then(resolve).catch(resolve);
-      } else {
-        resolve();
-      }
-    };
+    img.onload = () => resolve();
     img.onerror = () => resolve();
     img.src = src;
   });
 }
 
+/** جلب جميع الصور الثابتة المحلية عبر Vite */
+function baseCriticalImages(): string[] {
+  const cardAssets = import.meta.glob<{ default: string }>("@/assets/cards/*.{jpg,png,webp}", { eager: true });
+  const themeAssets = import.meta.glob<{ default: string }>("@/assets/themes/*.{jpg,png,webp}", { eager: true });
+  const iconAssets = import.meta.glob<{ default: string }>("@/assets/icons/*.{jpg,png,webp,svg}", { eager: true });
+  const shopAssets = import.meta.glob<{ default: string }>("@/assets/shop/*.{jpg,png,webp}", { eager: true });
+
+  const urls: string[] = [];
+  [cardAssets, themeAssets, iconAssets, shopAssets].forEach((group) => {
+    Object.values(group).forEach((mod) => {
+      if (mod?.default) urls.push(mod.default);
+    });
+  });
+  return urls;
+}
+
 export function IntroLoader({ ready = true, onDone }: { ready?: boolean; onDone: () => void }) {
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState(15);
   const [leaving, setLeaving] = useState(false);
-  const started = useRef(false);
+  const readyRef = useRef(ready);
+  readyRef.current = ready;
+
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
 
   useEffect(() => {
     let alive = true;
-    let totalAssets = 0;
+    const t0 = performance.now();
+    let totalAssets = 1;
     let loadedAssets = 0;
     let cloudArtworkFetched = false;
-    const t0 = performance.now();
-    const MIN_TIME = 2000; // وقت سينمائي سلس حتى لا تومض الشاشة فجأة
+    let forceDone = false;
 
     const updateProgress = () => {
       if (!alive) return;
       const assetRatio = totalAssets > 0 ? loadedAssets / totalAssets : 0;
-      const timeRatio = Math.min(1, (performance.now() - t0) / MIN_TIME);
+      const elapsed = performance.now() - t0;
+      const timeRatio = Math.min(1, elapsed / MIN_TIME);
       
-      // لا يكتمل الشريط إلى 100% إلا إذا جهزت السحابة + الصور + حساب القبطان
-      const isCloudReady = cloudArtworkFetched && ready;
-      const real = isCloudReady ? assetRatio : Math.min(assetRatio, 0.75);
+      const isCloudReady = (cloudArtworkFetched && readyRef.current) || forceDone;
+      const real = isCloudReady ? assetRatio : Math.min(assetRatio, 0.85);
 
-      const combined = Math.min(real, timeRatio);
-      setProgress(combined * 100);
+      const targetRatio = forceDone ? 1 : Math.max(0.15, Math.min(real, timeRatio));
+      setProgress((prev) => Math.min(100, Math.max(prev, Math.round(targetRatio * 100))));
 
-      if (assetRatio >= 1 && isCloudReady && timeRatio >= 1) {
+      if ((assetRatio >= 1 && isCloudReady && timeRatio >= 1) || forceDone) {
         setLeaving(true);
         window.setTimeout(() => {
-          if (alive) onDone();
-        }, 500);
+          if (alive) onDoneRef.current();
+        }, 400);
         return;
       }
 
@@ -91,7 +86,7 @@ export function IntroLoader({ ready = true, onDone }: { ready?: boolean; onDone:
 
     // 1. تحميل الصور المضمنة
     const localUrls = baseCriticalImages();
-    totalAssets = localUrls.length;
+    totalAssets = Math.max(1, localUrls.length);
 
     localUrls.forEach((url) => {
       void preloadImage(url).then(() => {
@@ -109,7 +104,7 @@ export function IntroLoader({ ready = true, onDone }: { ready?: boolean; onDone:
             const signed = await artworkUrl(row.image_path);
             if (signed) cloudUrls.push(signed);
           } catch {
-            // تخطي الرابط إن تعذر
+            // تخطي إن تعذر
           }
         }
 
@@ -122,63 +117,79 @@ export function IntroLoader({ ready = true, onDone }: { ready?: boolean; onDone:
           });
         }
       } catch {
-        // الاستمرار بالصور الافتراضية عند غياب الاتصال
+        // الاستمرار بالصور الافتراضية
       } finally {
         if (alive) cloudArtworkFetched = true;
       }
     })();
 
-    // صمام أمان حتى لا يتعطل اللاعب إذا كان الإنترنت بطيئاً جداً (أقصاه 8 ثوانٍ)
+    // صمام أمان أقصاه 5 ثوانٍ حتى لا يعلق اللاعب أبداً على 0%
     const timeoutGuard = window.setTimeout(() => {
       if (alive) {
+        forceDone = true;
         cloudArtworkFetched = true;
         loadedAssets = totalAssets;
       }
-    }, 8000);
+    }, 5000);
 
     return () => {
       alive = false;
       cancelAnimationFrame(raf);
       window.clearTimeout(timeoutGuard);
     };
-  }, [ready, onDone]);
+  }, []);
 
   // تشغيل الموسيقى التصويرية فور أول تفاعل
   useEffect(() => {
     const fire = () => {
-      if (started.current) return;
-      started.current = true;
-      playSfx("intro", 0.9);
+      startAmbientSound();
+      window.removeEventListener("pointerdown", fire);
+      window.removeEventListener("keydown", fire);
     };
-    fire();
     window.addEventListener("pointerdown", fire, { once: true });
-    return () => window.removeEventListener("pointerdown", fire);
+    window.addEventListener("keydown", fire, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", fire);
+      window.removeEventListener("keydown", fire);
+    };
   }, []);
+
+  const startAmbientSound = () => {
+    try {
+      playSfx("click", 0.6);
+      playAmbient();
+    } catch {
+      // تجاهل إذا حظر المتصفح الصوت التلقائي
+    }
+  };
 
   const stage = Math.min(STAGES.length - 1, Math.floor((progress / 100) * STAGES.length));
 
   return (
-    <div className={`tos-intro ${leaving ? "out" : ""}`} role="status" aria-live="polite" aria-label="جاري تحميل اللعبة">
-      <img src={introArt} alt="عرش إله البحار وأسطول يشق الموج العاصف" width={1088} height={1920} className="tos-intro-art" />
-      <div className="tos-intro-rays" aria-hidden="true" />
-      <div className="tos-intro-top" dir="rtl">
-        <span className="tos-intro-badge">الموسم الأول</span>
-        <h1 className="tos-intro-title"><span>عرش</span><b>البحار</b></h1>
-        <p>من يحكم الموج… يحكم العالم</p>
-      </div>
-      <div className="tos-intro-bottom" dir="rtl">
+    <aside
+      className={`tos-intro-backdrop ${leaving ? "leaving" : ""}`}
+      role="status"
+      aria-live="polite"
+      aria-label="شاشة التحميل والتجهيز"
+    >
+      <div className="tos-intro-panel">
+        <div className="tos-intro-anchor">
+          <Anchor className="h-10 w-10 text-tos-gold animate-bounce" />
+        </div>
+
         <div className="tos-intro-ring" style={{ "--p": `${progress * 3.6}deg` } as React.CSSProperties}>
           <span>{Math.round(progress)}<small>%</small></span>
         </div>
-        <div className="tos-intro-status">
-          <strong>{STAGES[stage]}</strong>
-          <ol className="tos-intro-steps" aria-hidden="true">
-            {STAGES.map((s, i) => (
-              <li key={s} className={i < stage ? "done" : i === stage ? "now" : ""} />
-            ))}
-          </ol>
+
+        <div className="tos-intro-stage">
+          <Sparkles className="h-4 w-4 text-tos-gold inline ml-1.5 animate-spin" />
+          <span>{STAGES[stage]}</span>
+        </div>
+
+        <div className="tos-intro-bar">
+          <div className="tos-intro-fill" style={{ width: `${progress}%` }} />
         </div>
       </div>
-    </div>
+    </aside>
   );
 }
