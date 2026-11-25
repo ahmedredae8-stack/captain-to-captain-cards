@@ -76,6 +76,12 @@ const WeaponsLayer = forwardRef<WeaponsApi, Hooks>((props, ref) => {
   const get = (w: WeaponId) => {
     if (engines.current[w]) return engines.current[w];
     const H = () => hooks.current;
+    const root = box.current;
+    const wPx = root?.clientWidth || size.current.w || (typeof window !== "undefined" ? window.innerWidth : 450);
+    const hPx = root?.clientHeight || size.current.h || (typeof window !== "undefined" ? window.innerHeight : 500);
+    const dPx = typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 2) : 1;
+    size.current = { w: wPx, h: hPx, d: dPx };
+
     const e = FACTORY[w](box.current!, {
       config: H().config?.[w],
       onShake: (a: number, ms: number) => H().onShake?.(a, ms),
@@ -87,7 +93,7 @@ const WeaponsLayer = forwardRef<WeaponsApi, Hooks>((props, ref) => {
       onImpact: () => pending.current[w]?.onImpact?.(),
       onMissileImpact: (i: number, o: Outcome) => pending.current[w]?.onMissileImpact?.(i, o),
     });
-    e.resize(size.current.w, size.current.h, size.current.d);
+    e.resize(wPx, hPx, dPx);
     engines.current[w] = e;
     return e;
   };
@@ -106,6 +112,16 @@ const WeaponsLayer = forwardRef<WeaponsApi, Hooks>((props, ref) => {
   useImperativeHandle(ref, () => ({
     fire: (a) => {
       pending.current[a.weapon] = a;
+      const root = box.current;
+      if (root) {
+        const cw = root.clientWidth || (typeof window !== "undefined" ? window.innerWidth : size.current.w);
+        const ch = root.clientHeight || (typeof window !== "undefined" ? window.innerHeight : size.current.h);
+        const cd = typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 2) : 1;
+        if (cw !== size.current.w || ch !== size.current.h || cd !== size.current.d) {
+          size.current = { w: cw, h: ch, d: cd };
+          Object.values(engines.current).forEach((e: any) => e.resize(cw, ch, cd));
+        }
+      }
       const outcome = a.weapon !== "mortar" && a.outcome === "splash" ? "hit" : a.outcome;
       return get(a.weapon).fire({ from: a.from, to: a.to, outcome, shieldColor: a.shieldColor, track: a.track, burn: a.burn, freeze: a.freeze, pin: a.pin, fromTrack: a.fromTrack });
     },
