@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import { Anchor, Fish, LogOut, MessageCircle, Shield, Swords, Users, X, Sparkles } from "lucide-react";
-import SeaScene from "@/components/SeaScene";
+import SeaScene, { type SeaShip } from "@/components/SeaScene";
 import { CaptainAvatar } from "@/components/GameSprite";
 import { fleetCatalog, type FleetShip } from "@/lib/fleetCatalog";
 import { getSeaWorld, SEA_WORLDS } from "@/lib/seaWorld";
@@ -12,6 +12,7 @@ import { useLiveShips } from "@/lib/shipOverrides";
 import type { Player } from "@/lib/player";
 import WeaponsLayer, { type WeaponsApi, type WeaponId } from "@/fx/weapons/WeaponsLayer";
 import { CAPTAINS } from "@/lib/art";
+import { cachedLanes, fetchLanes, type Lane } from "@/lib/fleetLayout";
 
 // Card arts from battle arena
 import cannonArt from "@/assets/cards/cannon.jpg";
@@ -58,90 +59,143 @@ function playCustomAudio(type: "cannon" | "sail" | "shield" | "creak" | "click")
       // Fallback to default game sound system
       if (type === "cannon" || type === "shield") playSfx("click", 0.9);
       else if (type === "sail") playSfx("click", 0.6);
+      else if (type === "creak") playSfx("click", 0.4);
       else playSfx("click", 0.5);
     });
   } catch {
-    playSfx("click", 0.5);
+    // Ignore audio autoplay restrictions
   }
 }
 
-type TargetShip = {
+interface PirateProfileProps {
+  player: Player;
+  onClose: () => void;
+  onOpenChat?: (playerId: string) => void;
+}
+
+interface OceanEnemyShip {
   id: number;
   ship: FleetShip;
+  topPct: number;
+  leftPct: number;
+  size: number;
   hp: number;
   maxHp: number;
-  fishId: FishId;
-  fishQty: number;
+  fishCargo: { id: FishId; count: number };
   sunk: boolean;
-  x: number;
-  y: number;
-};
+}
 
-type Modal = "attack" | "plunder" | "support" | null;
-
-export function PirateProfile({
-  player,
-  isMe,
-  live,
-  onClose,
-  onMessage,
-}: {
-  player: Player;
-  live?: boolean;
-  isMe: boolean;
-  onClose: () => void;
-  onMessage: () => void;
-  onAttack?: () => void;
-}) {
-  const seed = useMemo(() => hash(player.id), [player.id]);
-  const world = useMemo(
-    () => (player.theme_id ? getSeaWorld(player.theme_id) : SEA_WORLDS[seed % SEA_WORLDS.length]!),
-    [player.theme_id, seed]
-  );
-  const myShips = useLiveShips(false);
-
-  // Sea turbulence increases when attacking or in enemy waters
-  const [stormLevel, setStormLevel] = useState<number>(1.8);
-  const [isAttacking, setIsAttacking] = useState(false);
-
-  const [fleet, setFleet] = useState<TargetShip[]>(() => {
-    // Natural positions for ships anchored in the waters
-    const points = [
-      { x: 24, y: 56 },
-      { x: 50, y: 68 },
-      { x: 76, y: 58 },
-    ];
-    return points.map((p, i) => {
-      const ship = fleetCatalog[(seed + i * 3) % Math.min(fleetCatalog.length, 8)] ?? fleetCatalog[0]!;
-      const fishId = (["sardine", "mackerel", "tuna"] as FishId[])[(seed + i) % 3]!;
-      return {
-        id: i,
-        ship,
-        hp: 160,
-        maxHp: 160,
-        fishId,
-        fishQty: 25 + ((seed * (i + 1)) % 45),
-        sunk: false,
-        ...p,
-      };
-    });
-  });
-
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [modal, setModal] = useState<Modal>(null);
-  const [notice, setNotice] = useState("");
-  const [travelling, setTravelling] = useState<{ targetId: number; ship: string } | null>(null);
+export default function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProps) {
+  const seed = useMemo(() => hash(player.id || player.name), [player.id, player.name]);
+  const liveShips = useLiveShips();
   const weaponsRef = useRef<WeaponsApi | null>(null);
-  const [hitFx, setHitFx] = useState<{ targetId: number; text: string } | null>(null);
 
-  const target = fleet.find((s) => s.id === selectedId) ?? null;
+  const worldId = player.seaWorld || SEA_WORLDS[seed % SEA_WORLDS.length].id;
+  const world = useMemo(() => getSeaWorld(worldId), [worldId]);
 
-  // Ambient ship creaking upon entering ocean
+  // Load real water berths (lanes) for this sea world so ships never land on islands or houses
+  const [lanes, setLanes] = useState<Lane[]>(() => cachedLanes(worldId));
+
+  useEffect(() => {
+    let active = true;
+    void fetchLanes(worldId).then((pub) => {
+      if (active && pub && pub.length >= 3) {
+        setLanes(pub);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [worldId]);
+
+  // Sea turbulence state (amplifies when attacking or entering)
+  const [stormLevel, setStormLevel] = useState<number>(1.8);
+  const [isAttacking, setIsAttacking] = useState<boolean>(false);
+
+  // Sound upon entering opponent's ocean
   useEffect(() => {
     playCustomAudio("creak");
   }, []);
 
-  // Filter available weapons from player's fleet ships
+  // Build the enemy fleet placed strictly in the natural water berths of the sea world
+  const enemyFleet = useMemo<OceanEnemyShip[]>(() => {
+    const pool = fleetCatalog;
+    const fishKeys = Object.keys(FISH) as FishId[];
+    const list: OceanEnemyShip[] = [];
+
+    // Up to 3 main ships on the calibrated water berths (dock positions)
+    const count = Math.min(3, Math.max(2, (seed % 3) + 1));
+
+    for (let i = 0; i < count; i++) {
+      const lane = lanes[i] || lanes[0] || { dockX: 51.1, dockY: 51.2, size: 28 };
+      const ship = pool[(seed + i * 4) % pool.length] ?? pool[0]!;
+      const maxHp = ship.data?.tier ? ship.data.tier * 60 + 80 : 120;
+      const fishId = fishKeys[(seed + i * 5) % fishKeys.length] ?? "sardine";
+      const fishCount = 8 + ((seed + i * 7) % 22);
+
+      list.push({
+        id: i + 1,
+        ship,
+        topPct: lane.dockY,
+        leftPct: lane.dockX,
+        size: lane.size || 28,
+        hp: maxHp,
+        maxHp,
+        fishCargo: { id: fishId, count: fishCount },
+        sunk: false,
+      });
+    }
+    return list;
+  }, [seed, lanes]);
+
+  const [fleet, setFleet] = useState<OceanEnemyShip[]>(enemyFleet);
+
+  // Update fleet positions when lanes are loaded from cloud
+  useEffect(() => {
+    setFleet((curr) =>
+      curr.map((s, idx) => {
+        const lane = lanes[idx] || lanes[0];
+        if (!lane) return s;
+        return {
+          ...s,
+          topPct: lane.dockY,
+          leftPct: lane.dockX,
+          size: lane.size || 28,
+        };
+      })
+    );
+  }, [lanes]);
+
+  const [selectedShipId, setSelectedShipId] = useState<number | null>(enemyFleet[0]?.id ?? 1);
+  const [modal, setModal] = useState<"attack" | "plunder" | "support" | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [hitFx, setHitFx] = useState<{ targetId: number; text: string } | null>(null);
+
+  const target = useMemo(() => fleet.find((s) => s.id === selectedShipId), [fleet, selectedShipId]);
+
+  // Feed ships directly into the WebGL Sea Engine so they float inside water waves
+  const seaShips = useMemo<SeaShip[]>(() => {
+    return fleet.map((s) => ({
+      id: `enemy-ship-${s.id}`,
+      src: s.ship.hull,
+      x: s.leftPct / 100,
+      y: s.topPct / 100,
+      width: (s.size || 28) / 100,
+      waterline: 0.88,
+      visible: !s.sunk,
+    }));
+  }, [fleet]);
+
+  // Player's own usable fleet for plundering
+  const myShips = useMemo(() => {
+    return fleetCatalog.map((ship, idx) => {
+      const ov = liveShips[ship.id];
+      const isOwned = idx === 0 || (ov && (ov.hull > 0 || ov.weapons.length > 0));
+      return { ship, isOwned, data: ov || { hull: 100, weapons: ship.data?.weapons ?? ["cannon"] } };
+    }).filter((s) => s.isOwned);
+  }, [liveShips]);
+
+  // Weapons with card arts
   const availableWeapons = useMemo(() => {
     const ids = [...new Set(myShips.flatMap((s) => s.data.weapons))];
     const supported: WeaponId[] = ["cannon", "mortar", "missile", "torpedo", "fire_barrel", "frost_shell", "harpoon"];
@@ -152,33 +206,42 @@ export function PirateProfile({
     });
   }, [myShips]);
 
+  // Attack with live weapon projectile layer - exact lock-on to the ship's water location
   const attack = async (weaponId: string) => {
     if (!target) return;
     const weapon = availableWeapons.find((w) => w.id === weaponId);
     if (!weapon || !weaponsRef.current) return;
     const id = target.id;
     const layer = document.querySelector<HTMLElement>(".enemy-weapons-host");
-    const targetEl = document.querySelector<HTMLElement>(`[data-enemy-ship="${id}"]`);
     const layerRect = layer?.getBoundingClientRect();
-    const targetRect = targetEl?.getBoundingClientRect();
-    if (!layerRect || !targetRect) return;
+    if (!layerRect) return;
+
     setModal(null);
     playCustomAudio("cannon");
-    setStormLevel(3.0);
+    setStormLevel(3.2);
     setIsAttacking(true);
-    setNotice(`💣 إطلاق «${weapon.name}» نحو سفينة «${target.ship.name}»!`);
+    setNotice(`💣 إطلاق «${weapon.name}» بدقة نحو سفينة «${target.ship.name}»!`);
+
+    // Lock-on coordinates inside the layer: directly onto the ship's center in the water
+    const toX = (target.leftPct / 100) * layerRect.width;
+    const toY = (target.topPct / 100) * layerRect.height;
+    const fromX = layerRect.width * 0.5;
+    const fromY = layerRect.height - 40;
+
     try {
       await weaponsRef.current.fire({
         weapon: weapon.id,
-        from: { x: layerRect.width * 0.5, y: layerRect.height - 58 },
-        to: { x: targetRect.left + targetRect.width / 2 - layerRect.left, y: targetRect.top + targetRect.height / 2 - layerRect.top },
+        from: { x: fromX, y: fromY },
+        to: { x: toX, y: toY },
         outcome: "hit",
         onImpact: () => {
-          setFleet((items) => items.map((s) => {
-            if (s.id !== id) return s;
-            const hp = Math.max(0, s.hp - weapon.dmg);
-            return { ...s, hp, sunk: hp === 0 };
-          }));
+          setFleet((items) =>
+            items.map((s) => {
+              if (s.id !== id) return s;
+              const hp = Math.max(0, s.hp - weapon.dmg);
+              return { ...s, hp, sunk: hp === 0 };
+            })
+          );
           setHitFx({ targetId: id, text: `-${weapon.dmg} ضرر` });
           window.setTimeout(() => setHitFx(null), 1400);
         },
@@ -189,279 +252,308 @@ export function PirateProfile({
     }
   };
 
-  const plunder = async (ship: ReturnType<typeof useLiveShips>[number]) => {
+  const plunder = (myShipName: string) => {
     if (!target) return;
-    const id = target.id;
-    setModal(null);
-    setTravelling({ targetId: id, ship: ship.name });
-    setNotice(`⛵ سفينتك «${ship.name}» تبحر وسط الأمواج للنهب...`);
     playCustomAudio("sail");
+    const fish = FISH[target.fishCargo.id];
+    const stolenCount = Math.min(target.fishCargo.count, Math.max(2, Math.floor(target.fishCargo.count * 0.5)));
 
-    window.setTimeout(async () => {
-      const current = fleet.find((s) => s.id === id);
-      if (!current || current.sunk || current.fishQty <= 0) {
-        setNotice("لم تعد هناك حمولة سمك قابلة للنهب.");
-        setTravelling(null);
-        return;
-      }
-      const qty = Math.min(current.fishQty, Math.max(1, Math.floor(current.fishQty * 0.4)));
-      await saveHaul([{ id: current.fishId, qty }]);
-      setFleet((items) =>
-        items.map((s) => (s.id === id ? { ...s, fishQty: Math.max(0, s.fishQty - qty) } : s))
-      );
-      setNotice(`🏴‍☠️ نجحت الغارة! استولت «${ship.name}» على ${qty} سمكة.`);
-      window.setTimeout(() => setTravelling(null), 1500);
-    }, 1800);
+    saveHaul([target.fishCargo.id]);
+    setFleet((items) =>
+      items.map((s) =>
+        s.id === target.id
+          ? { ...s, fishCargo: { ...s.fishCargo, count: Math.max(0, s.fishCargo.count - stolenCount) } }
+          : s
+      )
+    );
+    setModal(null);
+    setNotice(`🏴‍☠️ أبحرت سفينتك «${myShipName}» ونهبت ${stolenCount}x من سمك ${fish?.name ?? "البحر"}!`);
+    window.setTimeout(() => setNotice(null), 3600);
   };
 
   const support = (crewName: string) => {
     if (!target) return;
-    const id = target.id;
-    setModal(null);
     playCustomAudio("shield");
     setFleet((items) =>
-      items.map((s) => (s.id === id ? { ...s, hp: Math.min(s.maxHp, s.hp + 40), sunk: false } : s))
+      items.map((s) =>
+        s.id === target.id ? { ...s, hp: Math.min(s.maxHp, s.hp + 40), sunk: false } : s
+      )
     );
-    setHitFx({ targetId: id, text: "+40 ترميم" });
-    setNotice(`🛡️ وصل الطاقم «${crewName}» وتم ترميم سفينة «${target.ship.name}».`);
-    window.setTimeout(() => setHitFx(null), 1400);
+    setModal(null);
+    setNotice(`🛡️ انضم القبطان «${crewName}» لدعم سفينة «${target.ship.name}» وترميم دروعها (+40)!`);
+    window.setTimeout(() => setNotice(null), 3600);
   };
 
   return (
-    <div className={`enemy-ocean ${isAttacking ? "is-storming" : ""}`} role="dialog" aria-modal="true" dir="rtl">
-      {/* Dynamic 3D ocean scene with responsive waves */}
+    <div className={`enemy-ocean ${isAttacking ? "is-storming" : ""}`}>
+      {/* Dynamic Animated Sea Canvas with WebGL ship rendering & sea studio water effects */}
       <SeaScene
         theme={world}
-        params={{ amp: stormLevel, spd: stormLevel * 0.85, foam: stormLevel * 0.75, rip: stormLevel * 0.8 }}
+        ships={seaShips}
+        params={{
+          amp: 0.12 * stormLevel,
+          spd: 1.3 * stormLevel,
+          foam: 0.16 * stormLevel,
+          rip: 1.3,
+        }}
         className="enemy-ocean-canvas"
+        style={{ width: "100%", height: "100%" }}
       />
+
+      {/* Atmospheric Vignette & Storm Flash */}
       <div className="enemy-ocean-shade" />
 
-      {/* TOP HEADER: Styled exactly after the DailyReward golden banner panel */}
-      <div className="enemy-top-wrapper">
-        <header className="daily-panel enemy-header-panel">
-          <div className="enemy-header-content">
+      {/* Weapons Layer for true battle projectile animations */}
+      <div className="enemy-weapons-host">
+        <WeaponsLayer ref={weaponsRef} />
+      </div>
+
+      {/* TOP HEADER: DAILY REWARD LUXURY STYLE */}
+      <header className="enemy-top-wrapper">
+        <div className="daily-panel enemy-header-panel">
+          <div className="daily-head enemy-head-content">
             <div className="enemy-captain-badge">
               <div className="enemy-avatar-ring">
-                <CaptainAvatar seed={player.avatar_index ?? 0} url={player.avatar_url} className="enemy-avatar-img" />
+                <CaptainAvatar seed={player.name} size={52} />
               </div>
-              <div className="enemy-captain-meta">
-                <span className="daily-kicker">محيط القبطان الخصم</span>
-                <h1 className="daily-title enemy-c-name">{player.name}</h1>
-                <div className="enemy-status-row">
-                  <span className={`enemy-live-dot ${live ? "online" : "offline"}`} />
-                  <small>{live ? "🟢 متصل الآن" : "⚪ في الميناء"} · عالم {world.name}</small>
-                </div>
+              <div className="enemy-player-meta">
+                <span className="daily-kicker">محيط الخصم • {world.name}</span>
+                <h1 className="daily-title enemy-c-name">
+                  {player.name}
+                  {player.rank && <span className="enemy-c-rank">[{player.rank}]</span>}
+                </h1>
               </div>
             </div>
 
             <div className="enemy-header-actions">
-              {!isMe && (
-                <button type="button" className="tos-btn enemy-btn-msg" onClick={onMessage}>
-                  <MessageCircle className="h-4 w-4" />
+              {onOpenChat && (
+                <button
+                  type="button"
+                  className="tos-btn enemy-btn-msg"
+                  onClick={() => {
+                    playCustomAudio("click");
+                    onOpenChat(player.id);
+                  }}
+                  title="مراسلة القرصان"
+                >
+                  <MessageCircle size={17} />
                   <span>مراسلة</span>
                 </button>
               )}
-              <button type="button" className="tos-btn enemy-btn-exit" onClick={onClose} aria-label="خروج من المحيط">
-                <LogOut className="h-4 w-4" />
-                <span>خروج</span>
+              <button
+                type="button"
+                className="tos-btn enemy-btn-exit"
+                onClick={() => {
+                  playCustomAudio("click");
+                  onClose();
+                }}
+                title="الخروج من المحيط"
+              >
+                <LogOut size={17} />
+                <span>الخروج</span>
               </button>
             </div>
           </div>
-        </header>
-      </div>
+        </div>
+      </header>
 
-      {notice && <div className="enemy-toast" role="status"><Sparkles className="h-4 w-4 inline ml-1 text-amber-400" />{notice}</div>}
+      {/* Notification Toast */}
+      {notice && (
+        <div className="enemy-notice-banner">
+          <Sparkles size={16} className="text-amber-400 animate-spin" />
+          <span>{notice}</span>
+        </div>
+      )}
 
-      {/* MAIN OCEAN STAGE */}
-      <main className="enemy-sea-area" onClick={() => setSelectedId(null)}>
-        {/* Reuse the exact live weapon FX engines from the full battle arena */}
-        <div className="enemy-weapons-host"><WeaponsLayer ref={weaponsRef} /></div>
+      {/* HIT DAMAGE POPUP OVER TARGET SHIP */}
+      {hitFx && (
+        <div
+          className="enemy-hit-fx"
+          style={{
+            top: `${fleet.find((s) => s.id === hitFx.targetId)?.topPct ?? 50}%`,
+            left: `${fleet.find((s) => s.id === hitFx.targetId)?.leftPct ?? 50}%`,
+          }}
+        >
+          {hitFx.text}
+        </div>
+      )}
 
-        {/* Damage / Heal numbers floating above target */}
-        {hitFx && (
-          <div
-            className={`enemy-hit-float ${hitFx.text.startsWith("+") ? "heal" : "dmg"}`}
-            style={{
-              left: `${fleet[hitFx.targetId]?.x ?? 50}%`,
-              top: `${(fleet[hitFx.targetId]?.y ?? 50) - 15}%`,
-            }}
-          >
-            {hitFx.text}
-          </div>
-        )}
-
-        {/* Enemy Ships: floating naturally on water without rectangular boxes */}
+      {/* INTERACTIVE OVERLAY OVER WATER BERTHS: RETICLE, HITBOX & HUD */}
+      <div className="enemy-ships-layer">
         {fleet.map((s) => {
-          const fish = FISH.find((f) => f.id === s.fishId);
-          const chosen = selectedId === s.id;
+          const isSelected = selectedShipId === s.id;
+          const fish = FISH[s.fishCargo.id];
+          const hpPct = Math.round((s.hp / s.maxHp) * 100);
 
           return (
             <div
               key={s.id}
-              className={`enemy-ship-spot ${chosen ? "is-chosen" : ""} ${s.sunk ? "is-sunk" : ""}`}
-              style={{ left: `${s.x}%`, top: `${s.y}%` }}
               data-enemy-ship={s.id}
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedId(s.id);
-                setNotice("");
+              className={`enemy-ship-spot ${isSelected ? "is-selected" : ""} ${s.sunk ? "is-sunk" : ""}`}
+              style={{
+                top: `${s.topPct}%`,
+                left: `${s.leftPct}%`,
+              }}
+              onClick={() => {
                 playCustomAudio("click");
+                setSelectedShipId(s.id);
               }}
             >
-              {/* Natural water ripple and foam effect beneath the hull */}
-              <div className="enemy-water-wake" />
-
-              {/* THREE ACTION BUTTONS: Pure DailyReward luxury golden style */}
-              {chosen && (
-                <div className="enemy-ship-actions-orbit" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className="enemy-act-btn act-attack"
-                    disabled={s.sunk}
-                    onClick={() => setModal("attack")}
-                  >
-                    <div className="enemy-act-icon-wrap">
-                      <Swords className="h-5 w-5" />
-                    </div>
-                    <b>هجوم</b>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="enemy-act-btn act-plunder"
-                    disabled={s.sunk || s.fishQty <= 0}
-                    onClick={() => setModal("plunder")}
-                  >
-                    <div className="enemy-act-icon-wrap">
-                      <Fish className="h-5 w-5" />
-                    </div>
-                    <b>نهب</b>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="enemy-act-btn act-support"
-                    onClick={() => setModal("support")}
-                  >
-                    <div className="enemy-act-icon-wrap">
-                      <Shield className="h-5 w-5" />
-                    </div>
-                    <b>دعم</b>
-                  </button>
-                </div>
-              )}
-
-              {/* Plundering Raider sailing animation */}
-              {travelling?.targetId === s.id && (
-                <div className="enemy-raider-ship">
-                  <span className="raider-hull">⛵</span>
-                  <small>{travelling.ship}</small>
-                </div>
-              )}
-
-              {/* The ship hull itself with transparent background */}
-              <div className="enemy-ship-hull-wrap">
-                <img src={s.ship.hull} alt={s.ship.name} className="enemy-ship-graphic" />
-                <div className="enemy-ship-water-reflection" />
+              {/* Fallback Hull (visible if WebGL canvas is still loading) */}
+              <div className="ship-fallback-hull">
+                <img
+                  src={s.ship.hull}
+                  alt={s.ship.name}
+                  className="enemy-ship-img"
+                  draggable={false}
+                />
               </div>
 
-              {/* Sleek Golden Pill Tag under the ship */}
-              <div className="enemy-ship-tag">
-                <div className="enemy-ship-hp-bar">
-                  <div className="enemy-ship-hp-fill" style={{ width: `${(s.hp / s.maxHp) * 100}%` }} />
+              {/* Target Indicator Reticle */}
+              {isSelected && !s.sunk && <div className="enemy-ship-reticle" />}
+
+              {/* Sunk Marker */}
+              {s.sunk && <div className="enemy-sunk-marker">غارقة ☠️</div>}
+
+              {/* Floating Health & Fish HUD Bar */}
+              {!s.sunk && (
+                <div className="enemy-ship-hud">
+                  <span className="enemy-ship-name-tag">{s.ship.name}</span>
+                  <div className="enemy-hp-track">
+                    <div
+                      className={`enemy-hp-fill ${hpPct < 30 ? "hp-danger" : hpPct < 60 ? "hp-mid" : ""}`}
+                      style={{ width: `${hpPct}%` }}
+                    />
+                  </div>
+                  {s.fishCargo.count > 0 && (
+                    <div className="enemy-fish-badge">
+                      <Fish size={11} />
+                      <span>{s.fishCargo.count}</span>
+                      <small>{fish?.name ?? "سمك"}</small>
+                    </div>
+                  )}
                 </div>
-                <div className="enemy-ship-labels">
-                  <span className="enemy-ship-title">{s.ship.name}</span>
-                  <span className="enemy-ship-fish">
-                    <Fish className="h-3 w-3 inline text-cyan-300 ml-1" />
-                    {s.fishQty} {fish?.name ?? "سمكة"}
-                  </span>
-                </div>
-                {s.sunk && <span className="enemy-sunk-badge">غرقت</span>}
-              </div>
+              )}
             </div>
           );
         })}
-      </main>
+      </div>
 
-      {/* Target Info Bar at bottom */}
-      {target && (
-        <div className="enemy-target-dock">
-          <Anchor className="h-4 w-4 text-amber-400" />
-          <span>السفينة المختارة: <b>{target.ship.name}</b></span>
-          <span className="text-cyan-300">| حمولة الصيد: {target.fishQty} سمكة</span>
-          <button type="button" onClick={() => setSelectedId(null)} className="enemy-dock-close" aria-label="إلغاء التحديد">
-            <X className="h-4 w-4" />
-          </button>
+      {/* FLOATING ACTION DOCK: 3 ROYAL BUTTONS (ATTACK, PLUNDER, SUPPORT) */}
+      {target && !target.sunk && (
+        <div className="enemy-action-dock">
+          <div className="enemy-action-bar daily-panel">
+            <button
+              type="button"
+              className="enemy-act-btn btn-attack"
+              onClick={() => {
+                playCustomAudio("click");
+                setModal("attack");
+              }}
+            >
+              <div className="enemy-act-icon-wrap">
+                <Swords size={22} />
+              </div>
+              <b>هجوم بالسلاح</b>
+              <small>قصف وتدمير</small>
+            </button>
+
+            <button
+              type="button"
+              className="enemy-act-btn btn-plunder"
+              onClick={() => {
+                playCustomAudio("click");
+                setModal("plunder");
+              }}
+            >
+              <div className="enemy-act-icon-wrap">
+                <Anchor size={22} />
+              </div>
+              <b>نهب وسرقة</b>
+              <small>إرسال سفينة صيد</small>
+            </button>
+
+            <button
+              type="button"
+              className="enemy-act-btn btn-support"
+              onClick={() => {
+                playCustomAudio("click");
+                setModal("support");
+              }}
+            >
+              <div className="enemy-act-icon-wrap">
+                <Shield size={22} />
+              </div>
+              <b>دعم وإسناد</b>
+              <small>إرسال قبطان وطاقم</small>
+            </button>
+          </div>
         </div>
       )}
 
-      {/* MODAL: SELECTION OF WEAPONS / PLUNDER / SUPPORT (Exact DailyReward Design) */}
-      {modal && target && (
-        <div className="daily-overlay enemy-modal-overlay" onClick={() => setModal(null)}>
-          <div className="daily-panel enemy-popup-panel" onClick={(e) => e.stopPropagation()}>
-            <button type="button" className="tos-x" aria-label="إغلاق" onClick={() => setModal(null)}>
-              <X className="h-4 w-4" />
-            </button>
-
-            <header className="daily-head">
-              <span className="daily-kicker">
-                {modal === "attack" ? "ترسانة المدافع والأسلحة" : modal === "plunder" ? "أسطول الغارات والنهب" : "قباطنة وطواقم الإسناد"}
-              </span>
-              <h2 className="daily-title">
-                {modal === "attack"
-                  ? `اختر سلاحاً لقصف «${target.ship.name}»`
-                  : modal === "plunder"
-                  ? `اختر سفينة لنهب صيد «${target.ship.name}»`
-                  : `أرسل قبطاناً أو طاقماً لدعم «${target.ship.name}»`}
-              </h2>
-              <div className="daily-streak">
-                <b>{modal === "attack" ? target.hp : modal === "plunder" ? target.fishQty : "+40"}</b>
-                <span>{modal === "attack" ? `من ${target.maxHp} درع` : modal === "plunder" ? "سمكة متوفرة" : "نقطة صيانة"}</span>
+      {/* MODAL POPUPS IN DAILY REWARD STYLE */}
+      {modal && (
+        <div className="enemy-modal-backdrop" onClick={() => setModal(null)}>
+          <div className="daily-panel enemy-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="daily-head enemy-modal-head">
+              <div>
+                <span className="daily-kicker">
+                  {modal === "attack" ? "ترسانة المعارك" : modal === "plunder" ? "أسطول النهب" : "طاقم الإسناد"}
+                </span>
+                <h3 className="daily-title">
+                  {modal === "attack"
+                    ? "اختر سلاحك لإطلاقه على السفينة"
+                    : modal === "plunder"
+                    ? "اختر سفينتك لسرقة السمك"
+                    : "اختر قبطاناً لدعم وترميم السفينة"}
+                </h3>
               </div>
-            </header>
+              <button type="button" className="tos-x" onClick={() => setModal(null)}>
+                <X size={18} />
+              </button>
+            </div>
 
-            {/* WEAPON CARDS: EXACT CARDS AS IN BATTLE SCREEN */}
+            {/* ATTACK WEAPONS: REAL CARD ARTWORK */}
             {modal === "attack" && (
               <div className="enemy-cards-grid">
-                {availableWeapons.map((w) => (
+                {availableWeapons.map((weapon) => (
                   <button
-                    key={w.id}
+                    key={weapon.id}
                     type="button"
                     className="enemy-battle-card"
-                    onClick={() => attack(w.id)}
+                    onClick={() => attack(weapon.id)}
                   >
                     <div className="enemy-card-art-box">
-                      <img src={w.art} alt={w.name} className="enemy-card-art" />
-                      <span className="enemy-card-badge">💥 {w.dmg}</span>
+                      <img src={weapon.art} alt={weapon.name} className="enemy-card-art" />
+                      <span className="enemy-card-badge">💥 {weapon.dmg} ضرر</span>
                     </div>
                     <div className="enemy-card-info">
-                      <strong className="enemy-card-title">{w.name}</strong>
-                      <small className="enemy-card-sub">ضرر قصف {w.dmg} نقطة</small>
+                      <strong className="enemy-card-title">{weapon.name}</strong>
+                      <small className="enemy-card-sub">سلاح {weapon.type}</small>
                     </div>
-                    <span className="tos-btn enemy-card-fire-btn">إطلاق السلاح</span>
+                    <span className="tos-btn enemy-card-fire-btn">إطلاق القذيفة</span>
                   </button>
                 ))}
               </div>
             )}
 
-            {/* PLUNDER FLEET SELECTION */}
+            {/* PLUNDER FLEET: SELECTION OF OWN SHIPS */}
             {modal === "plunder" && (
               <div className="enemy-cards-grid">
-                {myShips.map((s) => (
+                {myShips.map(({ ship }) => (
                   <button
-                    key={s.key}
+                    key={ship.id}
                     type="button"
                     className="enemy-battle-card"
-                    onClick={() => void plunder(s)}
+                    onClick={() => plunder(ship.name)}
                   >
-                    <div className="enemy-card-art-box">
-                      <img src={s.hull} alt={s.name} className="enemy-ship-preview-art" />
+                    <div className="enemy-card-art-box plunder-ship-art">
+                      <img src={ship.hull} alt={ship.name} className="enemy-ship-thumb" />
+                      <span className="enemy-card-badge text-amber-300">⚡ سرعة {ship.data?.class ?? 1}</span>
                     </div>
                     <div className="enemy-card-info">
-                      <strong className="enemy-card-title">{s.name}</strong>
-                      <small className="enemy-card-sub">سفينة إغارة سريعة</small>
+                      <strong className="enemy-card-title">{ship.name}</strong>
+                      <small className="enemy-card-sub">رتبة {ship.data?.tier ?? 1}</small>
                     </div>
                     <span className="tos-btn enemy-card-fire-btn">إرسال للنهب</span>
                   </button>
@@ -548,13 +640,13 @@ export function PirateProfile({
         .enemy-header-panel {
           width: min(100%, 46rem) !important;
           padding: 0.75rem 1.25rem !important;
-          border-radius: 1.2rem !important;
-          background: radial-gradient(120% 60% at 50% 0%, rgba(245, 202, 102, 0.22), transparent 70%),
-                      linear-gradient(165deg, rgba(25, 45, 68, 0.96), rgba(8, 18, 30, 0.98)) !important;
-          border: 1px solid rgba(245, 202, 102, 0.55) !important;
-          box-shadow: 0 15px 40px rgba(0, 0, 0, 0.75), 0 0 25px rgba(245, 202, 102, 0.2) !important;
+          background: linear-gradient(180deg, rgba(30, 20, 12, 0.94) 0%, rgba(14, 10, 7, 0.96) 100%) !important;
+          border: 1.5px solid rgba(245, 197, 66, 0.55) !important;
+          border-radius: 18px !important;
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 24px rgba(245, 197, 66, 0.18) !important;
+          backdrop-filter: blur(14px);
         }
-        .enemy-header-content {
+        .enemy-head-content {
           display: flex;
           align-items: center;
           justify-content: space-between;
@@ -563,53 +655,37 @@ export function PirateProfile({
         .enemy-captain-badge {
           display: flex;
           align-items: center;
-          gap: 0.9rem;
+          gap: 0.85rem;
         }
         .enemy-avatar-ring {
+          position: relative;
           width: 3.4rem;
           height: 3.4rem;
-          border-radius: 50%;
-          border: 2px solid #eabf5b;
-          box-shadow: 0 0 15px rgba(234, 191, 91, 0.45);
-          overflow: hidden;
-          flex-shrink: 0;
-          background: #071523;
+          border-radius: 9999px;
+          padding: 2px;
+          background: conic-gradient(from 180deg, #f5c542, #8b6508, #ffd875, #b8860b, #f5c542);
+          box-shadow: 0 0 16px rgba(245, 197, 66, 0.45);
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
-        .enemy-avatar-img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-        }
-        .enemy-captain-meta {
+        .enemy-player-meta {
           display: flex;
           flex-direction: column;
-          gap: 0.1rem;
         }
         .enemy-c-name {
-          margin: 0 !important;
-          text-align: right !important;
+          margin: 0;
           font-size: 1.15rem !important;
-          color: #f7d684 !important;
-          text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
-        }
-        .enemy-status-row {
+          color: #fff4d0 !important;
+          text-shadow: 0 2px 8px rgba(0,0,0,0.8);
           display: flex;
           align-items: center;
           gap: 0.4rem;
-          color: #cbd5e1;
+        }
+        .enemy-c-rank {
           font-size: 0.75rem;
-        }
-        .enemy-live-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-        }
-        .enemy-live-dot.online {
-          background: #4ade80;
-          box-shadow: 0 0 8px #4ade80;
-        }
-        .enemy-live-dot.offline {
-          background: #94a3b8;
+          color: #f5c542;
+          font-weight: normal;
         }
         .enemy-header-actions {
           display: flex;
@@ -617,430 +693,427 @@ export function PirateProfile({
           gap: 0.6rem;
         }
         .enemy-btn-msg {
-          display: inline-flex !important;
-          align-items: center !important;
-          gap: 0.4rem !important;
-          padding: 0.55rem 0.9rem !important;
-          border-radius: 0.85rem !important;
-          font-weight: 800 !important;
+          background: linear-gradient(180deg, #2a5a8c 0%, #17385c 100%) !important;
+          border: 1px solid rgba(135, 206, 250, 0.45) !important;
+          color: #e0f2fe !important;
+          padding: 0.5rem 0.9rem !important;
           font-size: 0.82rem !important;
-          background: linear-gradient(180deg, #2563eb, #1d4ed8) !important;
-          color: #fff !important;
-          box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4) !important;
-          border: 1px solid rgba(147, 197, 253, 0.4) !important;
+          border-radius: 10px !important;
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
           cursor: pointer;
+          transition: transform 0.15s ease, filter 0.15s ease;
+        }
+        .enemy-btn-msg:hover {
+          filter: brightness(1.15);
+          transform: translateY(-1px);
         }
         .enemy-btn-exit {
-          display: inline-flex !important;
-          align-items: center !important;
-          gap: 0.4rem !important;
-          padding: 0.55rem 0.95rem !important;
-          border-radius: 0.85rem !important;
-          font-weight: 800 !important;
+          background: linear-gradient(180deg, #8c2a2a 0%, #571616 100%) !important;
+          border: 1px solid rgba(250, 135, 135, 0.45) !important;
+          color: #ffe4e4 !important;
+          padding: 0.5rem 0.9rem !important;
           font-size: 0.82rem !important;
-          background: linear-gradient(180deg, #dc2626, #991b1b) !important;
-          color: #fff !important;
-          box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4) !important;
-          border: 1px solid rgba(254, 202, 202, 0.4) !important;
+          border-radius: 10px !important;
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
           cursor: pointer;
+          transition: transform 0.15s ease, filter 0.15s ease;
         }
-        .enemy-toast {
-          position: absolute;
-          z-index: 25;
-          top: 6.2rem;
-          left: 50%;
-          transform: translateX(-50%);
-          width: min(92vw, 32rem);
-          padding: 0.6rem 1rem;
-          border-radius: 1rem;
-          background: rgba(7, 21, 35, 0.95);
-          border: 1px solid rgba(245, 202, 102, 0.7);
-          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.8), 0 0 20px rgba(245, 202, 102, 0.25);
-          color: #ffe08b;
-          font-weight: 800;
-          font-size: 0.85rem;
-          text-align: center;
-          backdrop-filter: blur(8px);
-          animation: pop-toast 0.25s cubic-bezier(0.2, 1, 0.3, 1) both;
-        }
-        @keyframes pop-toast {
-          from { opacity: 0; transform: translate(-50%, -10px) scale(0.95); }
-          to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+        .enemy-btn-exit:hover {
+          filter: brightness(1.15);
+          transform: translateY(-1px);
         }
 
-        /* SEA MAIN STAGE & SHIPS */
-        .enemy-sea-area {
-          position: relative;
-          flex: 1;
-          min-height: 0;
-          overflow: hidden;
-          z-index: 2;
+        /* NOTICE BANNER */
+        .enemy-notice-banner {
+          position: absolute;
+          top: 5.5rem;
+          left: 50%;
+          transform: translateX(-50%);
+          z-index: 15;
+          background: rgba(12, 18, 26, 0.9);
+          border: 1px solid rgba(245, 197, 66, 0.5);
+          color: #fffae8;
+          padding: 0.5rem 1.25rem;
+          border-radius: 9999px;
+          display: flex;
+          align-items: center;
+          gap: 0.6rem;
+          font-size: 0.88rem;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+          backdrop-filter: blur(8px);
+          animation: float-down 0.25s ease-out;
         }
-        .enemy-weapons-host { position: absolute; inset: 0; z-index: 18; pointer-events: none; }
+        @keyframes float-down {
+          from { opacity: 0; transform: translate(-50%, -10px); }
+          to { opacity: 1; transform: translate(-50%, 0); }
+        }
+
+        /* WEAPON PROJECTILE LAYER */
+        .enemy-weapons-host {
+          position: absolute;
+          inset: 0;
+          z-index: 18;
+          pointer-events: none;
+        }
+
+        /* HIT FX POPUP */
+        .enemy-hit-fx {
+          position: absolute;
+          z-index: 25;
+          transform: translate(-50%, -100%);
+          font-size: 1.35rem;
+          font-weight: 900;
+          color: #ff3b3b;
+          text-shadow: 0 0 10px rgba(255, 0, 0, 0.8), 0 2px 4px #000;
+          pointer-events: none;
+          animation: hit-rise 1.4s ease-out forwards;
+        }
+        @keyframes hit-rise {
+          0% { opacity: 0; transform: translate(-50%, -60%) scale(0.6); }
+          20% { opacity: 1; transform: translate(-50%, -100%) scale(1.2); }
+          80% { opacity: 1; transform: translate(-50%, -140%) scale(1); }
+          100% { opacity: 0; transform: translate(-50%, -170%) scale(0.9); }
+        }
+
+        /* SHIPS LAYER - INTERACTIVE OVERLAY */
+        .enemy-ships-layer {
+          position: absolute;
+          inset: 0;
+          z-index: 6;
+          pointer-events: none;
+        }
+
+        /* INTERACTIVE SHIP HITBOX SPOT */
         .enemy-ship-spot {
           position: absolute;
           transform: translate(-50%, -50%);
+          width: 7.5rem;
+          height: 7.5rem;
+          pointer-events: auto;
+          cursor: pointer;
           display: flex;
           flex-direction: column;
           align-items: center;
-          cursor: pointer;
-          transition: transform 0.2s ease;
-        }
-        .enemy-ship-spot:hover {
-          transform: translate(-50%, -52%);
+          justify-content: center;
         }
         .enemy-ship-spot.is-sunk {
-          filter: grayscale(1);
-          opacity: 0.55;
-        }
-
-        /* NATURAL WATER RIPPLE / FOAM BENEATH SHIP */
-        .enemy-water-wake {
-          position: absolute;
-          width: clamp(7.5rem, 18vw, 12rem);
-          height: clamp(2rem, 5vw, 3.2rem);
-          bottom: 1.8rem;
-          border-radius: 50%;
-          background: radial-gradient(ellipse at center, rgba(255, 255, 255, 0.35) 0%, rgba(125, 211, 252, 0.22) 40%, transparent 75%);
-          box-shadow: 0 0 25px rgba(56, 189, 248, 0.3);
           pointer-events: none;
-          animation: wake-pulse 3.2s ease-in-out infinite alternate;
-          z-index: 1;
-        }
-        @keyframes wake-pulse {
-          0% { transform: scale(0.92) rotate(-1deg); opacity: 0.5; }
-          100% { transform: scale(1.08) rotate(1.5deg); opacity: 0.85; }
         }
 
-        /* SHIP GRAPHIC WITHOUT BLACK BOX */
-        .enemy-ship-hull-wrap {
-          position: relative;
-          z-index: 2;
-          background: none !important;
-          border: none !important;
-          animation: ship-float 3.6s ease-in-out infinite alternate;
+        /* FALLBACK HULL (kept subtle; WebGL draws main hull into waves) */
+        .ship-fallback-hull {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          pointer-events: none;
+          opacity: 0.12; /* subtle depth */
         }
-        .enemy-ship-spot:nth-child(2) .enemy-ship-hull-wrap { animation-delay: -1.2s; }
-        .enemy-ship-spot:nth-child(3) .enemy-ship-hull-wrap { animation-delay: -2.4s; }
-        @keyframes ship-float {
-          0% { transform: translateY(0) rotate(-1deg); }
-          50% { transform: translateY(-7px) rotate(1deg); }
-          100% { transform: translateY(1px) rotate(-0.5deg); }
-        }
-        .enemy-ship-graphic {
-          width: clamp(6.5rem, 17vw, 11rem);
-          height: auto;
-          max-height: clamp(4.5rem, 12vw, 7.5rem);
+        .enemy-ship-img {
+          width: 90%;
+          height: 90%;
           object-fit: contain;
-          filter: drop-shadow(0 12px 14px rgba(0, 0, 0, 0.75));
-          display: block;
         }
 
-        /* SHIP LABELS & HEALTH PILL */
-        .enemy-ship-tag {
-          position: relative;
-          z-index: 3;
-          margin-top: -0.4rem;
+        /* GOLDEN TARGET RETICLE */
+        .enemy-ship-reticle {
+          position: absolute;
+          width: 7.8rem;
+          height: 7.8rem;
+          border: 2px dashed rgba(245, 197, 66, 0.95);
+          border-radius: 50%;
+          pointer-events: none;
+          box-shadow: 0 0 20px rgba(245, 197, 66, 0.45), inset 0 0 16px rgba(245, 197, 66, 0.25);
+          animation: spin-reticle 9s linear infinite;
+        }
+        @keyframes spin-reticle {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+
+        /* SUNK MARKER */
+        .enemy-sunk-marker {
+          position: absolute;
+          padding: 0.2rem 0.6rem;
+          border-radius: 9999px;
+          background: rgba(180, 20, 20, 0.85);
+          color: #fff;
+          font-size: 0.75rem;
+          font-weight: 800;
+          border: 1px solid #f87171;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+        }
+
+        /* SHIP HUD */
+        .enemy-ship-hud {
+          position: absolute;
+          bottom: -2.1rem;
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 0.2rem;
-          padding: 0.25rem 0.65rem 0.35rem;
-          border-radius: 99px;
-          background: rgba(7, 21, 35, 0.88);
-          border: 1px solid rgba(245, 202, 102, 0.55);
-          box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
-          backdrop-filter: blur(4px);
+          gap: 2px;
+          pointer-events: none;
         }
-        .enemy-ship-hp-bar {
-          width: 4.8rem;
-          height: 4px;
+        .enemy-ship-name-tag {
+          font-size: 0.74rem;
+          font-weight: bold;
+          color: #fffae8;
+          text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+          white-space: nowrap;
+        }
+        .enemy-hp-track {
+          width: 5rem;
+          height: 5px;
           background: rgba(0, 0, 0, 0.75);
-          border-radius: 99px;
+          border-radius: 9999px;
+          border: 1px solid rgba(255, 255, 255, 0.25);
           overflow: hidden;
         }
-        .enemy-ship-hp-fill {
+        .enemy-hp-fill {
           height: 100%;
-          background: linear-gradient(90deg, #ef4444, #eab308, #22c55e);
-          transition: width 0.4s ease;
+          background: linear-gradient(90deg, #10b981, #34d399);
+          transition: width 0.3s ease;
         }
-        .enemy-ship-labels {
+        .enemy-hp-fill.hp-mid {
+          background: linear-gradient(90deg, #f59e0b, #fbbf24);
+        }
+        .enemy-hp-fill.hp-danger {
+          background: linear-gradient(90deg, #ef4444, #f87171);
+        }
+        .enemy-fish-badge {
           display: flex;
           align-items: center;
-          gap: 0.45rem;
-          font-size: 0.7rem;
-        }
-        .enemy-ship-title {
-          font-weight: 800;
-          color: #f7d684;
-        }
-        .enemy-ship-fish {
-          color: #bae6fd;
+          gap: 3px;
           font-size: 0.65rem;
-        }
-        .enemy-sunk-badge {
-          position: absolute;
-          top: -0.5rem;
-          background: #991b1b;
-          color: #fff;
-          font-size: 0.62rem;
-          font-weight: 900;
-          padding: 0.1rem 0.4rem;
-          border-radius: 99px;
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+          color: #93c5fd;
+          background: rgba(10, 22, 36, 0.88);
+          padding: 1px 6px;
+          border-radius: 9999px;
+          border: 1px solid rgba(147, 197, 253, 0.35);
+          white-space: nowrap;
         }
 
-        /* THREE ACTION BUTTONS ORBIT (DailyReward Golden Luxury Style) */
-        .enemy-ship-actions-orbit {
+        /* 3 ROYAL FLOATING ACTION BUTTONS DOCK */
+        .enemy-action-dock {
           position: absolute;
-          bottom: calc(100% + 0.6rem);
+          bottom: max(1.2rem, env(safe-area-inset-bottom));
           left: 50%;
           transform: translateX(-50%);
-          display: flex;
-          gap: 0.75rem;
           z-index: 20;
-          animation: pop-actions 0.26s cubic-bezier(0.18, 1, 0.32, 1.2) both;
+          width: min(94%, 32rem);
         }
-        @keyframes pop-actions {
-          from { opacity: 0; transform: translate(-50%, 15px) scale(0.8); }
-          to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+        .enemy-action-bar {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 0.75rem;
+          padding: 0.75rem 1rem !important;
+          background: linear-gradient(180deg, rgba(28, 18, 12, 0.96) 0%, rgba(12, 8, 5, 0.98) 100%) !important;
+          border: 1.5px solid rgba(245, 197, 66, 0.6) !important;
+          border-radius: 20px !important;
+          box-shadow: 0 12px 34px rgba(0, 0, 0, 0.8), 0 0 24px rgba(245, 197, 66, 0.22) !important;
+          backdrop-filter: blur(14px);
         }
         .enemy-act-btn {
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(245, 197, 66, 0.25);
+          border-radius: 14px;
+          padding: 0.6rem 0.4rem;
           display: flex;
           flex-direction: column;
           align-items: center;
           gap: 0.25rem;
-          background: none;
-          border: none;
+          color: #fffae8;
           cursor: pointer;
-          color: #fff;
-          transition: transform 0.18s ease;
+          transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
         }
-        .enemy-act-btn:hover:not(:disabled) {
-          transform: translateY(-4px) scale(1.06);
-        }
-        .enemy-act-btn:disabled {
-          opacity: 0.45;
-          cursor: not-allowed;
-          filter: grayscale(1);
+        .enemy-act-btn:hover {
+          transform: translateY(-4px) scale(1.04);
+          border-color: rgba(245, 197, 66, 0.8);
+          box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
         }
         .enemy-act-icon-wrap {
           width: 3.2rem;
           height: 3.2rem;
           border-radius: 50%;
-          display: grid;
-          place-items: center;
-          border: 2px solid #f5ca66;
-          background: radial-gradient(circle at 40% 30%, rgba(245, 202, 102, 0.45), rgba(7, 21, 35, 0.95) 75%);
-          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6), 0 0 16px rgba(245, 202, 102, 0.45);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+          transition: transform 0.2s ease;
         }
-        .act-attack .enemy-act-icon-wrap {
-          border-color: #f87171;
-          color: #fecaca;
-          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6), 0 0 16px rgba(248, 113, 113, 0.5);
+        .enemy-act-btn:hover .enemy-act-icon-wrap {
+          transform: scale(1.1);
         }
-        .act-plunder .enemy-act-icon-wrap {
-          border-color: #38bdf8;
-          color: #bae6fd;
-          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6), 0 0 16px rgba(56, 189, 248, 0.5);
+        .btn-attack .enemy-act-icon-wrap {
+          background: linear-gradient(135deg, #ef4444 0%, #991b1b 100%);
+          border: 1.5px solid #fca5a5;
+          box-shadow: 0 0 16px rgba(239, 68, 68, 0.45);
         }
-        .act-support .enemy-act-icon-wrap {
-          border-color: #4ade80;
-          color: #bbf7d0;
-          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6), 0 0 16px rgba(74, 222, 128, 0.5);
+        .btn-plunder .enemy-act-icon-wrap {
+          background: linear-gradient(135deg, #f59e0b 0%, #b45309 100%);
+          border: 1.5px solid #fde68a;
+          box-shadow: 0 0 16px rgba(245, 158, 11, 0.45);
+        }
+        .btn-support .enemy-act-icon-wrap {
+          background: linear-gradient(135deg, #10b981 0%, #047857 100%);
+          border: 1.5px solid #a7f3d0;
+          box-shadow: 0 0 16px rgba(16, 185, 129, 0.45);
         }
         .enemy-act-btn b {
-          font-size: 0.72rem;
-          font-weight: 900;
-          padding: 0.15rem 0.6rem;
-          border-radius: 99px;
-          background: linear-gradient(180deg, #1f364d, #0b1928);
-          border: 1px solid rgba(245, 202, 102, 0.4);
-          color: #f7d684;
-          box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+          font-size: 0.82rem;
+          font-weight: 800;
+          color: #fff4d0;
+        }
+        .enemy-act-btn small {
+          font-size: 0.65rem;
+          color: #d1b584;
         }
 
-        /* FLOATING DAMAGE / REPAIR */
-        .enemy-hit-float {
-          position: absolute;
-          z-index: 35;
-          transform: translate(-50%, -50%);
-          font-size: 1.25rem;
-          font-weight: 900;
-          pointer-events: none;
-          animation: float-up 1.3s cubic-bezier(0.18, 0.89, 0.32, 1.28) forwards;
-          text-shadow: 0 2px 8px #000;
-        }
-        .enemy-hit-float.dmg {
-          color: #ef4444;
-          filter: drop-shadow(0 0 8px #ef4444);
-        }
-        .enemy-hit-float.heal {
-          color: #22c55e;
-          filter: drop-shadow(0 0 8px #22c55e);
-        }
-        @keyframes float-up {
-          0% { opacity: 0; transform: translate(-50%, 10px) scale(0.7); }
-          25% { opacity: 1; transform: translate(-50%, -10px) scale(1.2); }
-          100% { opacity: 0; transform: translate(-50%, -45px) scale(1); }
-        }
-
-        /* PLUNDERING RAIDER SHIP */
-        .enemy-raider-ship {
-          position: absolute;
-          z-index: 15;
-          left: -40%;
-          top: 10%;
-          font-size: 2.2rem;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          animation: raid-voyage 1.8s ease-in-out forwards;
-        }
-        .enemy-raider-ship small {
-          font-size: 0.62rem;
-          color: #fde047;
-          background: rgba(7, 21, 35, 0.9);
-          border: 1px solid #facc15;
-          padding: 0.1rem 0.4rem;
-          border-radius: 99px;
-          white-space: nowrap;
-        }
-        @keyframes raid-voyage {
-          0% { opacity: 0; transform: translateX(-40px); }
-          25% { opacity: 1; }
-          100% { opacity: 1; transform: translateX(120px); }
-        }
-
-        /* BOTTOM TARGET BAR */
-        .enemy-target-dock {
-          position: absolute;
-          bottom: max(0.8rem, env(safe-area-inset-bottom));
-          left: 50%;
-          transform: translateX(-50%);
-          z-index: 15;
+        /* MODAL WINDOW IN DAILY REWARD DESIGN */
+        .enemy-modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 240;
+          background: rgba(2, 6, 12, 0.75);
+          backdrop-filter: blur(6px);
           display: flex;
           align-items: center;
-          gap: 0.7rem;
-          padding: 0.6rem 1.1rem;
-          border-radius: 99px;
-          background: rgba(7, 21, 35, 0.95);
-          border: 1px solid rgba(245, 202, 102, 0.6);
-          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
-          font-size: 0.8rem;
-          color: #fff;
-          white-space: nowrap;
+          justify-content: center;
+          padding: 1rem;
+          animation: fade-backdrop 0.2s ease-out;
         }
-        .enemy-dock-close {
-          background: none;
-          border: none;
-          color: #cbd5e1;
-          cursor: pointer;
-          display: grid;
-          place-items: center;
+        @keyframes fade-backdrop {
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
-
-        /* ACTION SELECTION POPUP: CARDS & CREW (DailyReward Ornate Theme) */
-        .enemy-modal-overlay {
-          z-index: 250 !important;
-        }
-        .enemy-popup-panel {
-          width: min(96vw, 44rem) !important;
-          max-height: min(88svh, 48rem) !important;
-          overflow-y: auto !important;
+        .enemy-modal-card {
+          width: min(100%, 40rem) !important;
+          max-height: 85vh;
+          overflow-y: auto;
+          background: linear-gradient(180deg, rgba(28, 18, 12, 0.98) 0%, rgba(14, 9, 6, 0.99) 100%) !important;
+          border: 1.5px solid rgba(245, 197, 66, 0.7) !important;
+          border-radius: 22px !important;
           padding: 1.25rem !important;
+          box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85), 0 0 32px rgba(245, 197, 66, 0.25) !important;
         }
+        .enemy-modal-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          border-bottom: 1px solid rgba(245, 197, 66, 0.25);
+          padding-bottom: 0.75rem;
+          margin-bottom: 1rem;
+        }
+
+        /* CARDS GRID (WEAPONS / SHIPS / CREW) */
         .enemy-cards-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
-          gap: 0.75rem;
-          margin-top: 1rem;
+          grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+          gap: 0.85rem;
         }
         .enemy-battle-card {
+          background: rgba(255, 255, 255, 0.03);
+          border: 1.5px solid rgba(245, 197, 66, 0.3);
+          border-radius: 14px;
+          padding: 0.65rem;
           display: flex;
           flex-direction: column;
           align-items: center;
           text-align: center;
-          gap: 0.45rem;
-          padding: 0.65rem 0.5rem 0.75rem;
-          border-radius: 1rem;
-          background: radial-gradient(120% 60% at 50% 0%, rgba(245, 202, 102, 0.12), transparent 70%),
-                      linear-gradient(165deg, rgba(23, 40, 58, 0.95), rgba(9, 19, 29, 0.98));
-          border: 1px solid rgba(245, 202, 102, 0.4);
-          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
-          color: #fff;
+          gap: 0.4rem;
           cursor: pointer;
-          transition: transform 0.16s ease, border-color 0.16s ease;
+          transition: all 0.2s ease;
+          position: relative;
+          overflow: hidden;
         }
         .enemy-battle-card:hover {
           transform: translateY(-3px);
-          border-color: #f7d684;
-          box-shadow: 0 12px 28px rgba(0, 0, 0, 0.6), 0 0 16px rgba(247, 214, 132, 0.35);
+          border-color: rgba(245, 197, 66, 0.9);
+          background: rgba(245, 197, 66, 0.08);
+          box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6);
         }
         .enemy-card-art-box {
           position: relative;
           width: 100%;
-          aspect-ratio: 1;
-          border-radius: 0.8rem;
+          height: 6.8rem;
+          border-radius: 10px;
           overflow: hidden;
-          border: 1px solid rgba(245, 202, 102, 0.5);
-          background: #05101a;
+          background: rgba(0, 0, 0, 0.4);
+          border: 1px solid rgba(245, 197, 66, 0.25);
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
         .enemy-card-art {
           width: 100%;
           height: 100%;
           object-fit: cover;
+          transition: transform 0.3s ease;
+        }
+        .enemy-battle-card:hover .enemy-card-art {
+          transform: scale(1.08);
+        }
+        .enemy-ship-thumb {
+          width: 75%;
+          height: 75%;
+          object-fit: contain;
+          filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.7));
         }
         .enemy-crew-portrait {
           width: 100%;
           height: 100%;
           object-fit: cover;
         }
-        .enemy-ship-preview-art {
-          width: 100%;
-          height: 100%;
-          object-fit: contain;
-          padding: 0.4rem;
-        }
         .enemy-card-badge {
           position: absolute;
-          bottom: 0.3rem;
-          left: 0.3rem;
-          background: rgba(7, 21, 35, 0.9);
-          border: 1px solid rgba(245, 202, 102, 0.6);
-          padding: 0.1rem 0.4rem;
-          border-radius: 99px;
-          font-size: 0.68rem;
+          bottom: 4px;
+          right: 4px;
+          background: rgba(0, 0, 0, 0.85);
+          border: 1px solid rgba(245, 197, 66, 0.4);
+          font-size: 0.65rem;
           font-weight: 800;
-          color: #fef08a;
+          color: #fffae8;
+          padding: 1px 6px;
+          border-radius: 6px;
         }
         .enemy-card-info {
           display: flex;
           flex-direction: column;
-          gap: 0.15rem;
+          width: 100%;
         }
         .enemy-card-title {
-          font-size: 0.88rem;
-          color: #f7d684;
+          font-size: 0.82rem;
+          color: #fff4d0;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
         .enemy-card-sub {
           font-size: 0.68rem;
-          color: #cbd5e1;
+          color: #d1b584;
         }
         .enemy-card-fire-btn {
+          width: 100%;
           margin-top: 0.2rem;
-          width: 100% !important;
           padding: 0.35rem 0.5rem !important;
-          font-size: 0.72rem !important;
-          border-radius: 0.65rem !important;
-          font-weight: 900 !important;
-          color: #0c1824 !important;
-          background: linear-gradient(180deg, #f7d684, #d4a742) !important;
+          font-size: 0.75rem !important;
+          background: linear-gradient(180deg, #d97706 0%, #92400e 100%) !important;
+          border: 1px solid rgba(245, 197, 66, 0.6) !important;
+          border-radius: 8px !important;
+          color: #fff !important;
+        }
+        .enemy-card-fire-btn:hover {
+          filter: brightness(1.15);
         }
 
-        @media (max-width: 600px) {
+        @media (max-width: 640px) {
           .enemy-header-panel {
-            padding: 0.55rem 0.8rem !important;
+            padding: 0.6rem 0.8rem !important;
           }
           .enemy-avatar-ring {
             width: 2.7rem;
