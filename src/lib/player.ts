@@ -9,6 +9,10 @@ export type Player = {
   avatar_index?: number;
   avatar_url?: string | null;
   score?: number;
+  sea_world?: string;
+  active_fleet?: number[];
+  coins?: number;
+  gems?: number;
 };
 
 export type Friendship = {
@@ -96,4 +100,22 @@ export async function saveAvatarToAccount(id: string, avatarIndex: number) {
 
 export async function saveAvatarUrl(id: string, url: string | null) {
   await supabase.from("players").update({ avatar_url: url } as never).eq("id", id);
+}
+
+export async function saveSeaWorldToAccount(id: string, worldId: string) {
+  await supabase.from("players").update({ sea_world: worldId } as never).eq("id", id);
+}
+
+export async function saveActiveFleetToAccount(id: string, fleetIds: number[]) {
+  await supabase.from("players").update({ active_fleet: fleetIds } as never).eq("id", id);
+}
+
+export async function buyShipOnAccount(playerId: string, catalogId: number, price: number, currency: string) {
+  const { data, error } = await supabase.rpc("buy_ship" as never, {
+    _player_id: playerId,
+    _ship_catalog_id: catalogId,
+    _price: price,
+    _currency: currency,
+  } as never);
+  return { data, error };
 }
