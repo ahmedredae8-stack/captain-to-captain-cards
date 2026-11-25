@@ -8,10 +8,20 @@ import type { Player } from "@/lib/player";
 
 export const isDecoy = (id: string) => id.startsWith("decoy-") || id.startsWith("bot-");
 
+const formatLastSeen = (val?: string | null) => {
+  if (!val) return "غير معروف";
+  try {
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? "غير معروف" : d.toLocaleDateString("ar");
+  } catch {
+    return "غير معروف";
+  }
+};
+
 /** سجل القراصنة: حضور مباشر مع الحسابات العامة المتاحة، بلا بحث أو زر تحديث مكرر. */
-export function LiveDuels({ me, online, onPick }: {
+export function LiveDuels({ me, online = [], onPick }: {
   me: Player | null;
-  online: LobbyMeta[];
+  online?: LobbyMeta[];
   onPick: (p: Player) => void;
 }) {
   const [accounts, setAccounts] = useState<Player[]>([]);
@@ -45,9 +55,10 @@ export function LiveDuels({ me, online, onPick }: {
   }, []);
 
   const { live, away } = useMemo(() => {
-    const liveIds = new Set(online.map((p) => p.id));
+    const list = Array.isArray(online) ? online : [];
+    const liveIds = new Set(list.map((p) => p.id));
     const offline = accounts.filter((p) => p.id !== me?.id && !liveIds.has(p.id));
-    return { live: online.filter((p) => p.id !== me?.id), away: offline };
+    return { live: list.filter((p) => p.id !== me?.id), away: offline };
   }, [accounts, online, me?.id]);
 
   return <div className="duel-live" dir="rtl">
@@ -75,7 +86,7 @@ export function LiveDuels({ me, online, onPick }: {
           <i className="pf-dot" />
           <CaptainAvatar seed={p.avatar_index ?? 0} url={p.avatar_url} className="pf-av" />
           <b>{p.name}</b>
-          <small>آخر ظهور: {p.last_seen ? new Date(p.last_seen).toLocaleDateString("ar") : "غير معروف"}</small>
+          <small>آخر ظهور: {formatLastSeen(p.last_seen)}</small>
           <span className="pf-cta"><Compass className="h-3.5 w-3.5" /> عرض المحيط</span>
         </button>)}
       </div>
