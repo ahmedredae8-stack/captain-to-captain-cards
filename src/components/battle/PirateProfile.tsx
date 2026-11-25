@@ -191,13 +191,14 @@ export function PirateProfile({ player, isMe, live, onClose, onMessage, onOpenCh
   }, [fleet]);
 
   // Player's own usable fleet for plundering
+    // Player's own usable fleet for plundering
   const myShips = useMemo(() => {
     return fleetCatalog.map((ship, idx) => {
-      const ov = liveShips[ship.id];
-      const isOwned = idx === 0 || (ov && (ov.hull > 0 || ov.weapons.length > 0));
-      return { ship, isOwned, data: ov || { hull: 100, weapons: ship.data?.weapons ?? ["cannon"] } };
+      const isOwned = idx === 0 || idx < 4;
+      return { ship, isOwned, data: { hull: 100, weapons: ship.data?.weapons ?? ["cannon"] } };
     }).filter((s) => s.isOwned);
-  }, [liveShips]);
+  }, []);
+
 
   // Weapons with card arts
   const availableWeapons = useMemo(() => {
@@ -318,7 +319,8 @@ export function PirateProfile({ player, isMe, live, onClose, onMessage, onOpenCh
           <div className="daily-head enemy-head-content">
             <div className="enemy-captain-badge">
               <div className="enemy-avatar-ring">
-                <CaptainAvatar seed={player.name} size={52} />
+                <CaptainAvatar seed={player.avatar_index ?? 0} url={player.avatar_url} />
+
               </div>
               <div className="enemy-player-meta">
                 <span className="daily-kicker">محيط الخصم • {world.name}</span>
