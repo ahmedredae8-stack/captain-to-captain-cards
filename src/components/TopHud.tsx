@@ -1,4 +1,5 @@
 import { CaptainAvatar, nameSeed } from "@/components/GameSprite";
+import { CosmeticFrame } from "@/components/CosmeticFrame";
 import { Gift, Plus } from "lucide-react";
 
 import coinImg from "@/assets/dock2/coin.png";
@@ -56,7 +57,9 @@ export function TopHud({
           <circle cx="18" cy="18" r="16" className="tos-ring-bg" />
           <circle cx="18" cy="18" r="16" className="tos-ring-fg" strokeDasharray={`${progress * 100.5} 100.5`} />
         </svg>
-        <CaptainAvatar seed={seed} url={avatarUrl} className="tos-medal-art" />
+        <CosmeticFrame themeIndex={avatar ?? 0} size={56}>
+          <CaptainAvatar seed={seed} url={avatarUrl} className="tos-medal-art w-full h-full object-cover" />
+        </CosmeticFrame>
         <span className="tos-medal-lvl">{level}</span>
       </button>
 
