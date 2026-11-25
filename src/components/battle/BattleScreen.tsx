@@ -224,9 +224,12 @@ function Arena({ me, foe, seed, onClose, lab, online }: { me: Player; foe: Playe
   const shieldState = (side: Side, ship: number, s: ShieldState) => setShieldFx((m) => ({ ...m, [`${side}${ship}`]: { state: s, trig: (m[`${side}${ship}`]?.trig ?? 0) + 1 } }));
 
   const at = (side: Side, ship: number, spot: number, lift: number) => {
-    const r = root.current!.getBoundingClientRect();
-    const p = (side === foeS ? topBox : bottomBox).current!.getBoundingClientRect();
-    const q = (side === foeS ? top : bottom).current!.point(ship, spot, lift);
+    const r = root.current?.getBoundingClientRect();
+    const box = (side === foeS ? topBox : bottomBox).current;
+    const sea = (side === foeS ? top : bottom).current;
+    if (!r || !box || !sea) return { x: 0, y: 0 };
+    const p = box.getBoundingClientRect();
+    const q = sea.point(ship, spot, lift);
     return { x: p.left - r.left + q.x, y: p.top - r.top + q.y };
   };
 
@@ -354,7 +357,7 @@ function Arena({ me, foe, seed, onClose, lab, online }: { me: Player; foe: Playe
         layer: layer.current,
         launchPoint: (side, ship, kind) => at(side, ship, live.current[side].ships[ship]!.spot, kind === "waterline" ? 0 : 0.8),
         // Impacts land on the ship's live hull (where it actually floats now), never on empty water.
-        spotCenter: (side, ship) => shipCenter(side, ship),
+        spotCenter: (side, ship, spot) => at(side, ship, spot ?? live.current[side].ships[ship]!.spot, 0.35),
         shipCenter,
         onMissileImpact: (_i, e) => { const h = e.hits[0]; if (h && h.kind !== "miss" && h.kind !== "blocked") float(h.side, h.ship, "−10", "dmg"); },
         onUnsupported: () => undefined,
@@ -565,7 +568,7 @@ function Arena({ me, foe, seed, onClose, lab, online }: { me: Player; foe: Playe
 
   const overlay = (side: Side) => (_g: unknown, point: BattleSeaApi["point"], hullSize: BattleSeaApi["hullSize"]) => view[side].ships.map((s, i) => {
     const hs = hullSize(i);
-    const p = point(i, s.spot, 1.05);
+    const p = point(i, s.spot, 0.45);
     const fx = shieldFx[`${side}${i}`];
     const base = point(i, s.spot, 0);
     const targetable = s.alive && !over && card && (isShieldCard ? side === myS && !s.shield : side === foeS);
