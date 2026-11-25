@@ -69,8 +69,12 @@ function playCustomAudio(type: "cannon" | "sail" | "shield" | "creak" | "click")
 
 interface PirateProfileProps {
   player: Player;
+  isMe?: boolean;
+  live?: boolean;
   onClose: () => void;
+  onMessage?: () => void;
   onOpenChat?: (playerId: string) => void;
+  onAttack?: () => void;
 }
 
 interface OceanEnemyShip {
@@ -85,7 +89,7 @@ interface OceanEnemyShip {
   sunk: boolean;
 }
 
-export default function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProps) {
+export function PirateProfile({ player, isMe, live, onClose, onMessage, onOpenChat, onAttack }: PirateProfileProps) {
   const seed = useMemo(() => hash(player.id || player.name), [player.id, player.name]);
   const liveShips = useLiveShips();
   const weaponsRef = useRef<WeaponsApi | null>(null);
@@ -326,18 +330,33 @@ export default function PirateProfile({ player, onClose, onOpenChat }: PiratePro
             </div>
 
             <div className="enemy-header-actions">
-              {onOpenChat && (
+              {(onOpenChat || onMessage) && (
                 <button
                   type="button"
                   className="tos-btn enemy-btn-msg"
                   onClick={() => {
                     playCustomAudio("click");
-                    onOpenChat(player.id);
+                    if (onMessage) onMessage();
+                    else if (onOpenChat) onOpenChat(player.id);
                   }}
                   title="مراسلة القرصان"
                 >
                   <MessageCircle size={17} />
                   <span>مراسلة</span>
+                </button>
+              )}
+              {onAttack && !isMe && (
+                <button
+                  type="button"
+                  className="tos-btn enemy-btn-attack"
+                  onClick={() => {
+                    playCustomAudio("cannon");
+                    onAttack();
+                  }}
+                  title="بدء المعركة"
+                >
+                  <Swords size={17} />
+                  <span>قتال</span>
                 </button>
               )}
               <button
@@ -1141,3 +1160,5 @@ export default function PirateProfile({ player, onClose, onOpenChat }: PiratePro
     </div>
   );
 }
+
+export default PirateProfile;
