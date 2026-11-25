@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, ImagePlus, RefreshCw, Upload, Sparkles } from "lucide-react";
+import { CheckCircle2, ImagePlus, RefreshCw, Upload, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
-import { announceArtworkUpdate, artworkUrl, listArtwork } from "@/lib/artwork";
+import { announceArtworkUpdate, artworkUrl, isArtworkAdmin, listArtwork } from "@/lib/artwork";
 import { fleetCatalog } from "@/lib/fleetCatalog";
 
 type ShipRow = {
@@ -23,7 +23,7 @@ function filenameToShipNumber(filename: string): number | null {
   const ship = base.match(/^level_01_ship_(0[1-9])\.png$/);
   if (ship) return Number(ship[1]);
   if (base === "level_01_boss_10.png") return 10;
-  // Fallback: check any number in filename like ship_1 or 01
+  // فحص أي رقم في اسم الملف كبديل
   const anyNum = base.match(/(\d+)/);
   if (anyNum) {
     const n = Number(anyNum[1]);
@@ -67,7 +67,6 @@ export function ShipPackageStudio() {
       try {
         const response = await fetch(ENGINE_URL, { cache: "no-store" });
         if (!response.ok) {
-          // Fallback to /index.html if user placed it at root
           const fallbackResp = await fetch("/index.html", { cache: "no-store" });
           if (!fallbackResp.ok) throw new Error("لم يُعثر على محرك التأثيرات في /ship-effects/index.html");
           const fallbackHtml = await fallbackResp.text();
@@ -97,7 +96,7 @@ export function ShipPackageStudio() {
           const storedPath = latest.get(`ship-${shipId}`);
           let currentUrl = ship.hull;
           if (storedPath) {
-            try { currentUrl = await artworkUrl(storedPath); } catch { /* use bundled hull */ }
+            try { currentUrl = await artworkUrl(storedPath); } catch { /* الاحتفاظ بالصورة الافتراضية */ }
           }
           return {
             shipId,
@@ -150,7 +149,6 @@ export function ShipPackageStudio() {
     return () => { alive = false; };
   }, [engineHtml, ships, selectedId]);
 
-  // Handle uploading multiple PNG files
   function handleMultipleImages(files: FileList | null) {
     if (!files || files.length === 0) return;
     setBusy(true);
@@ -159,9 +157,7 @@ export function ShipPackageStudio() {
     try {
       const fileList = Array.from(files);
       const updated = ships.map((ship, idx) => {
-        // Try matching by filename first
         let matched = fileList.find(f => filenameToShipNumber(f.name) === ship.shipId);
-        // Fallback: match by index if names dont match
         if (!matched && idx < fileList.length && fileList.length > 1) {
           matched = fileList[idx];
         }
@@ -182,7 +178,6 @@ export function ShipPackageStudio() {
     }
   }
 
-  // Handle uploading single PNG for the currently selected ship
   function handleSingleImage(file?: File) {
     if (!file) return;
     if (file.size > MAX_IMAGE_BYTES) {
@@ -205,13 +200,31 @@ export function ShipPackageStudio() {
     }
 
     setBusy(true);
-    setStatus("جارٍ نشر الصور إلى مساحة التخزين وحفظ الأوضاع…");
+    setStatus("جارٍ التحقق من صلاحيات الأدمن…");
 
     try {
+      // 1. فحص تسجيل الدخول
+      const { data: authData } = await supabase.auth.getUser();
+      const user = authData?.user;
+      if (!user) {
+        throw new Error("يجب تسجيل الدخول في اللعبة أولاً بحساب الأدمن قبل الرفع.");
+      }
+
+      // 2. فحص صلاحية الأدمن
+      const isAdmin = await isArtworkAdmin();
+      if (!isAdmin) {
+        throw new Error("حسابك لا يمتلك رتبة الأدمن (admin). تأكد من تفعيل صلاحية الأدمن لحسابك في جدول user_roles.");
+      }
+
+      setStatus(`جارٍ رفع وحفظ ${staged.length} سفينة…`);
+
       for (const ship of staged) {
         const ext = ship.file.name.split(".").pop()?.toLowerCase() || "png";
-        const storagePath = `ships/ship-${ship.shipId}/idle-${Date.now()}.${ext}`;
+        // المسار الإلزامي المطابق لسياسات Supabase RLS: user_id/filename
+        const fileName = `ship-${ship.shipId}-${Date.now()}.${ext}`;
+        const storagePath = `${user.id}/${fileName}`;
 
+        // أ) رفع الملف إلى Storage
         const uploadResult = await supabase.storage
           .from("game-artwork")
           .upload(storagePath, ship.file, {
@@ -220,30 +233,47 @@ export function ShipPackageStudio() {
           });
 
         if (uploadResult.error) {
-          throw new Error(`فشل رفع ${ship.name}: ${uploadResult.error.message}`);
+          throw new Error(`فشل رفع ملف ${ship.name}: ${uploadResult.error.message}`);
         }
 
-        const { error: dbError } = await supabase.from("artwork_poses").upsert(
-          {
+        // ب) جلب السجلات القديمة لهذه السفينة لتنظيفها لاحقاً
+        const { data: oldRows } = await supabase
+          .from("artwork_poses")
+          .select("id, image_path")
+          .eq("category", "ship")
+          .eq("subject", `ship-${ship.shipId}`)
+          .eq("pose", "idle");
+
+        // ج) إدراج السجل الجديد ببيانات مطابقة لقواعد RLS
+        const { error: insertError } = await supabase
+          .from("artwork_poses")
+          .insert({
             category: "ship",
             subject: `ship-${ship.shipId}`,
             pose: "idle",
             image_path: storagePath,
-            credit: "محرر حزم السفن",
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "category,subject,pose" },
-        );
+            created_by: user.id,
+          });
 
-        if (dbError) {
-          throw new Error(`فشل حفظ بيانات ${ship.name}: ${dbError.message}`);
+        if (insertError) {
+          // التراجع عن الملف المرفوع إذا فشل حفظ قاعدة البيانات
+          await supabase.storage.from("game-artwork").remove([storagePath]);
+          throw new Error(`فشل حفظ سجل ${ship.name}: ${insertError.message}`);
+        }
+
+        // د) حذف السجلات والملفات القديمة في التخزين إن وجدت
+        if (oldRows && oldRows.length > 0) {
+          for (const old of oldRows) {
+            await supabase.from("artwork_poses").delete().eq("id", old.id);
+            await supabase.storage.from("game-artwork").remove([old.image_path]);
+          }
         }
       }
 
       await announceArtworkUpdate();
 
       setShips(prev => prev.map(s => s.file ? { ...s, currentUrl: s.previewUrl, file: undefined } : s));
-      setStatus(`تم نشر ${staged.length} سفينة بنجاح! التحديث أصبح سارياً فوراً.`);
+      setStatus(`تم نشر وتحديث ${staged.length} سفينة بنجاح! التحديث أصبح متاحاً باللعبة فوراً.`);
     } catch (error) {
       setStatus(`تعذر النشر: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -260,12 +290,11 @@ export function ShipPackageStudio() {
         <div>
           <h2 style={{ margin: 0, fontSize: 20, color: "#ffd36e" }}>استوديو رفع وتحديث السفن المباشر</h2>
           <p style={{ margin: "4px 0 0", color: "#a9c1cc", fontSize: 13 }}>
-            ارفع صور PNG الشفافة مباشرة (سفينة بسفينة أو تحديد متعدد) بدون الحاجة لملفات مضغوطة وبدون استهلاك للذاكرة.
+            ارفع صور PNG الشفافة مباشرة (سفينة بسفينة أو تحديد متعدد) وتطبيق التحديث باللعبة فورياً.
           </p>
         </div>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {/* Multi-file input */}
           <input
             ref={multiFileInputRef}
             type="file"
@@ -279,7 +308,6 @@ export function ShipPackageStudio() {
             رفع عدة صور دفعة واحدة
           </Button>
 
-          {/* Single-file input for selected ship */}
           <input
             ref={singleFileInputRef}
             type="file"
@@ -300,14 +328,15 @@ export function ShipPackageStudio() {
       </header>
 
       {status && (
-        <div style={{ background: "#102a3a", border: "1px solid #355870", borderRadius: 8, padding: "10px 14px", color: "#e3f2fd", fontSize: 13 }}>
-          {status}
+        <div style={{ background: "#102a3a", border: "1px solid #355870", borderRadius: 8, padding: "10px 14px", color: "#e3f2fd", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <AlertCircle style={{ width: 16, height: 16, flexShrink: 0 }} />
+          <span>{status}</span>
         </div>
       )}
 
       {engineError && (
         <div style={{ background: "#33161a", border: "1px solid #7f2632", borderRadius: 8, padding: "10px 14px", color: "#ffb4be", fontSize: 13 }}>
-          تنبيه المحرك: {engineError} (تأكد من وجود الملف في <code>public/ship-effects/index.html</code> أو <code>public/index.html</code>)
+          تنبيه المحرك: {engineError} (تأكد من وجود الملف في <code>public/ship-effects/index.html</code>)
         </div>
       )}
 
@@ -366,7 +395,7 @@ export function ShipPackageStudio() {
             </div>
           )}
           <p style={{ margin: "8px 4px 0", color: "#91aab7", fontSize: 12 }}>
-            المعاينة الحية تعرض محرك التأثيرات بكامل قوته: اللمعة، الإصلاح وإعادة التجميع، وتفتت الخشب والنيران عند التدمير.
+            المعاينة الحية تعرض محرك التأثيرات: اللمعة، الإصلاح وإعادة التجميع، وتفتت الخشب والنيران عند التدمير.
           </p>
         </div>
       </div>
