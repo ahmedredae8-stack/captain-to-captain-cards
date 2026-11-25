@@ -297,7 +297,8 @@ function Index() {
       {!intro && <PrivateMessageToast me={player} onOpenChat={(peer) => { setChatPeer(peer); setWin("chat"); }} />}
       {!intro && !loading && !player && <CaptainGate onReady={(p) => { setPlayer(p); void refresh(); }} />}
 
-      {intro && <IntroLoader onDone={finishIntro} />}
+      {intro && <IntroLoader ready={!loading} onDone={finishIntro} />}
+
       </main>
     </div>
   );
