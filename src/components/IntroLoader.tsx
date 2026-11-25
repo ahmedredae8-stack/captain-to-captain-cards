@@ -5,63 +5,151 @@ import introArt from "@/assets/intro-epic.jpg";
 import { hulls, fleetCatalog } from "@/lib/fleetCatalog";
 import { FISH } from "@/lib/catches";
 import { themes } from "@/lib/themes";
+import { listArtwork, artworkUrl } from "@/lib/artwork";
 
-const STAGES = ["تجهيز الأسطول", "شحن المدافع", "رسم خرائط المحيط", "رفع الراية"];
-const dockIcons = Object.values(import.meta.glob("@/assets/dock2/*.png", { eager: true, import: "default" })) as string[];
+const STAGES = [
+  "تجهيز الأسطول والمدافع",
+  "جلب سفن وتأثيرات السحابة",
+  "صلي علي النبي",
+  "رسم خرائط ومياه المحيط",
+  "تحميل قمرة القيادة والعتاد",
+  "رفع راية المعركة",
+];
 
-/** Every image the first screen needs, so the game opens fully drawn. */
-function criticalImages(): string[] {
+// جلب كافة الأصول والصور المضمنة في مجلد assets تلقائياً (البطاقات، الشخصيات، الأيقونات، السفن، الدروع)
+const bundledImages = Object.values(
+  import.meta.glob("@/assets/**/*.{png,jpg,jpeg,webp}", { eager: true, import: "default" })
+) as string[];
+
+/** جمع كافة الصور الثابتة التي تحتاجها اللعبة عند البداية */
+function baseCriticalImages(): string[] {
   const list = [
+    ...bundledImages,
     ...themes.flatMap((t) => [t.day.poster, t.night.poster]),
     ...hulls,
     ...fleetCatalog.map((s) => s.hull),
+    ...fleetCatalog.map((s) => s.photo),
     ...FISH.map((f) => f.img),
-    ...dockIcons,
   ];
   return [...new Set(list.filter(Boolean))];
 }
 
-function preload(src: string) {
+function preloadImage(src: string): Promise<void> {
   return new Promise<void>((resolve) => {
     const img = new Image();
     img.decoding = "async";
-    img.onload = img.onerror = () => resolve();
+    img.onload = () => {
+      // التأكد من فك تشفير الصورة في ذاكرة المتصفح
+      if ("decode" in img) {
+        img.decode().then(resolve).catch(resolve);
+      } else {
+        resolve();
+      }
+    };
+    img.onerror = () => resolve();
     img.src = src;
   });
 }
 
-export function IntroLoader({ onDone }: { onDone: () => void }) {
+export function IntroLoader({ ready = true, onDone }: { ready?: boolean; onDone: () => void }) {
   const [progress, setProgress] = useState(0);
   const [leaving, setLeaving] = useState(false);
   const started = useRef(false);
 
   useEffect(() => {
     let alive = true;
-    const urls = criticalImages();
-    let loaded = 0;
+    let totalAssets = 0;
+    let loadedAssets = 0;
+    let cloudArtworkFetched = false;
     const t0 = performance.now();
-    const MIN = 1600; // keep the cinematic beat even on instant cache hits
-    let raf = 0;
-    const tick = () => {
-      const real = urls.length ? loaded / urls.length : 1;
-      const time = Math.min(1, (performance.now() - t0) / MIN);
-      setProgress(Math.min(real, time) * 100);
-      if (real >= 1 && time >= 1) {
+    const MIN_TIME = 2000; // وقت سينمائي سلس حتى لا تومض الشاشة فجأة
+
+    const updateProgress = () => {
+      if (!alive) return;
+      const assetRatio = totalAssets > 0 ? loadedAssets / totalAssets : 0;
+      const timeRatio = Math.min(1, (performance.now() - t0) / MIN_TIME);
+      
+      // لا يكتمل الشريط إلى 100% إلا إذا جهزت السحابة + الصور + حساب القبطان
+      const isCloudReady = cloudArtworkFetched && ready;
+      const real = isCloudReady ? assetRatio : Math.min(assetRatio, 0.75);
+
+      const combined = Math.min(real, timeRatio);
+      setProgress(combined * 100);
+
+      if (assetRatio >= 1 && isCloudReady && timeRatio >= 1) {
         setLeaving(true);
-        window.setTimeout(() => alive && onDone(), 560);
+        window.setTimeout(() => {
+          if (alive) onDone();
+        }, 500);
         return;
       }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    urls.forEach((u) => void preload(u).then(() => { loaded++; }));
-    // Never trap the player behind a slow network.
-    const guard = window.setTimeout(() => { loaded = urls.length; }, 9000);
-    return () => { alive = false; cancelAnimationFrame(raf); window.clearTimeout(guard); };
-  }, [onDone]);
 
+      requestAnimationFrame(updateProgress);
+    };
+
+    const raf = requestAnimationFrame(updateProgress);
+
+    // 1. تحميل الصور المضمنة
+    const localUrls = baseCriticalImages();
+    totalAssets = localUrls.length;
+
+    localUrls.forEach((url) => {
+      void preloadImage(url).then(() => {
+        if (alive) loadedAssets++;
+      });
+    });
+
+    // 2. جلب صور السفن والتأثيرات المخصصة من Supabase وتحميلها فوراً قبل الفتح
+    void (async () => {
+      try {
+        const rows = await listArtwork();
+        const cloudUrls: string[] = [];
+        for (const row of rows) {
+          try {
+            const signed = await artworkUrl(row.image_path);
+            if (signed) cloudUrls.push(signed);
+          } catch {
+            // تخطي الرابط إن تعذر
+          }
+        }
+
+        if (alive && cloudUrls.length > 0) {
+          totalAssets += cloudUrls.length;
+          cloudUrls.forEach((u) => {
+            void preloadImage(u).then(() => {
+              if (alive) loadedAssets++;
+            });
+          });
+        }
+      } catch {
+        // الاستمرار بالصور الافتراضية عند غياب الاتصال
+      } finally {
+        if (alive) cloudArtworkFetched = true;
+      }
+    })();
+
+    // صمام أمان حتى لا يتعطل اللاعب إذا كان الإنترنت بطيئاً جداً (أقصاه 8 ثوانٍ)
+    const timeoutGuard = window.setTimeout(() => {
+      if (alive) {
+        cloudArtworkFetched = true;
+        loadedAssets = totalAssets;
+      }
+    }, 8000);
+
+    return () => {
+      alive = false;
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timeoutGuard);
+    };
+  }, [ready, onDone]);
+
+  // تشغيل الموسيقى التصويرية فور أول تفاعل
   useEffect(() => {
-    const fire = () => { if (started.current) return; started.current = true; playSfx("intro", 0.9); };
+    const fire = () => {
+      if (started.current) return;
+      started.current = true;
+      playSfx("intro", 0.9);
+    };
     fire();
     window.addEventListener("pointerdown", fire, { once: true });
     return () => window.removeEventListener("pointerdown", fire);
@@ -85,7 +173,9 @@ export function IntroLoader({ onDone }: { onDone: () => void }) {
         <div className="tos-intro-status">
           <strong>{STAGES[stage]}</strong>
           <ol className="tos-intro-steps" aria-hidden="true">
-            {STAGES.map((s, i) => <li key={s} className={i < stage ? "done" : i === stage ? "now" : ""} />)}
+            {STAGES.map((s, i) => (
+              <li key={s} className={i < stage ? "done" : i === stage ? "now" : ""} />
+            ))}
           </ol>
         </div>
       </div>
