@@ -1,3 +1,5 @@
+@import "./styles/luxury-cosmetics.css";
+
 @import "tailwindcss" source(none);
 @source "../src";
 @import "tw-animate-css";
