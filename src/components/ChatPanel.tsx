@@ -3,6 +3,8 @@ import { ArrowRight, Globe2, Loader2, Lock, Send } from "lucide-react";
 
 import { supabase } from "@/integrations/supabase/client";
 import { CaptainAvatar } from "@/components/GameSprite";
+import { CosmeticFrame } from "@/components/CosmeticFrame";
+import { CosmeticChatBubble } from "@/components/CosmeticChatBubble";
 import { isOnline, timeLabel, type Message, type Player } from "@/lib/player";
 import { playSfx } from "@/lib/sound";
 
@@ -111,13 +113,19 @@ function Messages({ me, rows, people }: { me: Player; rows: Message[]; people: R
       {rows.map((m) => {
         const mine = m.sender_id === me.id, p = people[m.sender_id];
         return (
-          <li key={m.id} className={mine ? "cp-msg me" : "cp-msg"}>
-            {!mine && <CaptainAvatar seed={p?.avatar_index ?? 0} url={p?.avatar_url} className="cp-ava sm" />}
-            <div className="cp-bubble">
-              {!mine && <b>{p?.name ?? "قبطان"}</b>}
-              <p>{m.body}</p>
-              <time>{timeLabel(m.created_at)}</time>
-            </div>
+          <li key={m.id} className={mine ? "cp-msg me flex items-end gap-2 justify-end" : "cp-msg flex items-end gap-2"}>
+            {!mine && (
+              <CosmeticFrame themeIndex={p?.avatar_index ?? 0} size={38}>
+                <CaptainAvatar seed={p?.avatar_index ?? 0} url={p?.avatar_url} className="w-full h-full object-cover" />
+              </CosmeticFrame>
+            )}
+            <CosmeticChatBubble
+              themeIndex={mine ? (me.avatar_index ?? 0) : (p?.avatar_index ?? 0)}
+              playerName={mine ? me.name : (p?.name ?? "قبطان")}
+              message={m.body}
+              time={timeLabel(m.created_at)}
+              isMe={mine}
+            />
           </li>
         );
       })}
