@@ -1,0 +1,96 @@
+/* src/styles/luxury-cosmetics.css */
+@keyframes cg {
+  50% {
+    box-shadow: inset 0 0 0 5px rgba(255,255,255,.07), inset 0 0 80px var(--gl), 0 0 52px var(--gl);
+  }
+}
+@keyframes sw {
+  0% { transform: translateX(-90px); }
+  60%, 100% { transform: translateX(480px); }
+}
+@keyframes fg {
+  50% { box-shadow: inset 0 0 0 2px rgba(255,255,255,.18), 0 0 20px #ff5a1a; }
+}
+@keyframes sp { to { transform: rotate(360deg); } }
+@keyframes tw { 50% { opacity: .25; } }
+
+/* بطاقة الملف الشخصي الفاخرة */
+.luxury-card {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  min-height: 700px;
+  padding: 22px 26px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border-radius: 30px;
+  background: linear-gradient(160deg, var(--c1), var(--c2));
+  border: 3px solid var(--bd);
+  box-shadow: inset 0 0 0 5px rgba(255,255,255,.07), inset 0 0 60px var(--gl), 0 0 34px var(--gl);
+  overflow: hidden;
+  animation: cg 3s ease-in-out infinite;
+  font-family: 'Cairo', sans-serif;
+  color: #fff;
+}
+.luxury-card:before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(rgba(255,255,255,.1), transparent 30%);
+  pointer-events: none;
+}
+.luxury-card:after {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border-radius: 22px;
+  border: 1.5px solid var(--bd);
+  opacity: .35;
+  pointer-events: none;
+}
+.luxury-card > * { position: relative; }
+
+/* أشرطة الموارد (ذهب، جواهر، نقاط) */
+.lux-wb { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+.lux-pill {
+  display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  border-radius: 16px; background: rgba(0,0,0,.38); border: 2px solid;
+  box-shadow: inset 0 0 12px rgba(255,255,255,.08);
+}
+.lux-pill b { font-size: 20px; }
+.lux-pill div { display: flex; flex-direction: column; line-height: 1.15; }
+.lux-pill span { font-size: 16px; font-weight: 900; }
+.lux-pill small { font-size: 11px; font-weight: 600; opacity: .8; }
+.lux-pill.g { border-color: #f2b934; color: #ffe9a0; }
+.lux-pill.m { border-color: #5ee0ff; color: #c6f4ff; }
+.lux-pill.s { border-color: #ff8aa8; color: #ffd3de; }
+
+/* أزرار الأكشن السريعة */
+.lux-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+.lux-actions button {
+  font: 900 15px 'Cairo', sans-serif; color: #fff; padding: 12px 6px;
+  border-radius: 16px; border: 2px solid rgba(255,255,255,.55);
+  cursor: pointer; text-shadow: 0 1px 3px rgba(0,0,0,.6); transition: transform 0.15s;
+}
+.lux-actions button:hover { transform: scale(1.03); }
+.lux-btn-atk { background: linear-gradient(#ff8a2a, #d3201a 55%, #7d0a12); animation: fg 1.6s ease-in-out infinite; }
+.lux-btn-msg { background: linear-gradient(#6fa0ff, #2a55d6 55%, #14297a); }
+.lux-btn-frd { background: linear-gradient(#5ee8a6, #12875d 55%, #06382a); }
+
+/* فقاعات الشات الفاخرة */
+.lux-bubble-wrap { position: relative; padding-top: 15px; margin: 6px 0; }
+.lux-bubble-tag {
+  position: absolute; top: 0; right: 24px; z-index: 3; padding: 2px 24px;
+  font-size: 12px; font-weight: 900; border-radius: 4px;
+  clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 50%, 100% 100%, 0 100%, 6px 50%);
+}
+.lux-bubble-body {
+  position: relative; overflow: hidden; padding: 18px 20px 12px;
+  border-radius: 20px 20px 6px 20px; box-shadow: inset 0 0 0 3px rgba(255,255,255,.15), 0 8px 24px rgba(0,0,0,.35);
+}
+.lux-bubble-body .sw {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 70px;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.35), transparent);
+  animation: sw 4.5s ease-in-out infinite; pointer-events: none;
+}
