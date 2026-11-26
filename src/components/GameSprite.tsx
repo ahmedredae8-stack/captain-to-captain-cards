@@ -4,6 +4,8 @@ import captainsAtlas from "@/assets/captains-atlas.png.asset.json";
 import crewAtlas from "@/assets/crew-atlas.png.asset.json";
 import gemsAtlas from "@/assets/gems-atlas.png.asset.json";
 import weaponsAtlas from "@/assets/weapons-atlas.png.asset.json";
+import { CosmeticFrame } from "./CosmeticFrame";
+import { useEquippedFrame } from "../lib/equippedFrame";
 
 type Atlas = "weapon" | "crew" | "captain" | "armor" | "gem";
 
@@ -32,9 +34,30 @@ export function GameSprite({ atlas, index, className = "" }: { atlas: Atlas; ind
   );
 }
 
-export function CaptainAvatar({ seed = 0, url, className = "" }: { seed?: number; url?: string | null | undefined; className?: string }) {
+export function CaptainAvatar({
+  seed = 0,
+  url,
+  className = "",
+  size = 64,
+  frameIndex,
+  isSelf = false,
+}: {
+  seed?: number;
+  url?: string | null | undefined;
+  className?: string;
+  size?: number;
+  frameIndex?: number;
+  isSelf?: boolean;
+}) {
   const src = url || CAPTAINS[Math.abs(seed) % CAPTAINS.length];
-  return <img src={src} alt="" draggable={false} className={`captain-sprite captain-photo ${className}`} />;
+  const mine = useEquippedFrame();
+  const idx = frameIndex ?? (isSelf ? mine : 0);
+
+  return (
+    <CosmeticFrame themeIndex={idx} size={size}>
+      <img src={src} alt="" draggable={false} className={`captain-sprite captain-photo ${className}`} />
+    </CosmeticFrame>
+  );
 }
 
 export function nameSeed(name: string) {
