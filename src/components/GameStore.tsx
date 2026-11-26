@@ -3,7 +3,7 @@ import { Check, Crown, Frame, Gem, Minus, Plus, Shield, ShipWheel, Swords, Users
 
 import { Button } from "@/components/ui/button";
 import { GameSprite, CaptainAvatar } from "@/components/GameSprite";
-import { CREW_ART, CREW_ART_MAP } from "@/lib/art";
+import { CAPTAINS, CREW_ART, CREW_ART_MAP } from "@/lib/art";
 import { CREWS, GEM_PACKS } from "@/lib/items";
 import { CARDS } from "@/components/battle/BattleScreen";
 import { FramesTab } from "@/components/FramesTab";
@@ -78,6 +78,8 @@ export function GameStore({
   onClose,
   gold = 0,
   gems = 0,
+  avatarUrl,
+  avatarIndex = 0,
   onSpend,
 }: {
   activeId: string;
@@ -85,8 +87,11 @@ export function GameStore({
   onClose: () => void;
   gold?: number;
   gems?: number;
+  avatarUrl?: string | null;
+  avatarIndex?: number;
   onSpend?: (kind: "gold" | "gems", amount: number) => boolean;
 }) {
+  const resolvedAvatarSrc = avatarUrl || CAPTAINS[Math.abs(avatarIndex) % CAPTAINS.length];
   const [tab, setTab] = useState<StoreTab>("ships");
   const [shipOpen, setShipOpen] = useState<LiveShip | null>(null);
   const tabs = [
@@ -141,7 +146,13 @@ export function GameStore({
               gold={gold}
               gems={gems}
               spend={spend}
-              avatar={<CaptainAvatar url={activeId || undefined} className="h-full w-full object-cover" />}
+              avatar={
+                <img
+                  src={resolvedAvatarSrc}
+                  alt=""
+                  className="w-full h-full object-cover rounded-full"
+                />
+              }
             />
           )}
           {tab === "ships" && (
