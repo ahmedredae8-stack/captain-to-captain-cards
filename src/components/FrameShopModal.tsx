@@ -95,9 +95,10 @@ export function FrameShopModal({
     setEquippedIdx(selectedIdx);
   };
 
-  const handleEquip = () => {
-    setEquippedFrame(selectedIdx);
-    setEquippedIdx(selectedIdx);
+  const handleEquip = (idx = selectedIdx) => {
+    setEquippedFrame(idx);
+    setEquippedIdx(idx);
+    window.dispatchEvent(new CustomEvent("c2c:frame_changed", { detail: { index: idx } }));
   };
 
   return (
@@ -166,28 +167,32 @@ export function FrameShopModal({
               </div>
             </div>
 
-            {/* Action Button */}
-            <div className="w-full mt-4">
+            {/* Action Buttons: Free Trial / Equip & Permanent Buy */}
+            <div className="w-full mt-4 flex flex-col gap-2">
               {isEquipped ? (
                 <div className="w-full py-2.5 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 font-black text-sm text-center">
-                  ✓ مجهّز حالياً
+                  ✓ مجهّز ومفعّل حالياً
                 </div>
-              ) : isOwned ? (
-                <button
-                  onClick={handleEquip}
-                  className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-sm transition-all hover:scale-102 active:scale-98 shadow-lg"
-                >
-                  تجهيز الإطار الآن
-                </button>
               ) : (
-                <button
-                  onClick={handleBuy}
-                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:brightness-110 text-white font-black text-sm transition-all hover:scale-102 active:scale-98 shadow-lg flex items-center justify-center gap-2"
-                >
-                  <span>شراء الإطار بـ</span>
-                  <span>{cost.amount.toLocaleString()}</span>
-                  <span>{cost.type === "coins" ? "🪙" : "💎"}</span>
-                </button>
+                <>
+                  <button
+                    onClick={() => handleEquip(selectedIdx)}
+                    className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:brightness-110 text-slate-950 font-black text-sm transition-all hover:scale-102 active:scale-98 shadow-lg flex items-center justify-center gap-2"
+                  >
+                    <span>⚡ تجربة وتجهيز الإطار مجاناً</span>
+                  </button>
+
+                  {!isOwned && (
+                    <button
+                      onClick={handleBuy}
+                      className="w-full py-2 rounded-xl bg-sky-950/80 hover:bg-sky-900 border border-sky-400/40 text-sky-200 font-bold text-xs transition-all flex items-center justify-center gap-2"
+                    >
+                      <span>شراء دائم في الحساب بـ</span>
+                      <span>{cost.amount.toLocaleString()}</span>
+                      <span>{cost.type === "coins" ? "🪙" : "💎"}</span>
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>
