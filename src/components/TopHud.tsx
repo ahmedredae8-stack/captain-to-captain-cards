@@ -1,88 +1,154 @@
-import { CaptainAvatar, nameSeed } from "@/components/GameSprite";
+// src/components/TopHud.tsx
+import React, { useEffect, useState, useMemo } from "react";
+import { getEquippedFrame, getTheme, LuxuryTheme } from "@/lib/luxuryCosmetics";
 import { CosmeticFrame } from "@/components/CosmeticFrame";
-import { Gift, Plus } from "lucide-react";
-
-import coinImg from "@/assets/dock2/coin.png";
-import rubyImg from "@/assets/dock2/ruby.png";
-import diamondImg from "@/assets/dock2/diamond.png";
-import fishImg from "@/assets/dock2/fish.png";
+import CaptainAvatar from "@/components/CaptainAvatar";
 
 type Props = {
-  name: string;
+  name?: string;
   avatar?: number;
   avatarUrl?: string | null;
-  title?: string;
   level?: number;
-  progress?: number;
+  rank?: string;
   coins?: number;
   rubies?: number;
   diamonds?: number;
-  fishFound?: number;
-  fishTotal?: number;
-  onAvatarClick?: () => void;
-  onGiftClick?: () => void;
-  onTopUp?: (kind: "coins" | "rubies" | "diamonds") => void;
+  onOpenStore?: () => void;
+  onOpenFrameShop?: () => void;
+  onOpenRewards?: () => void;
+  hasReward?: boolean;
 };
 
-/** Throne of Seas command strip: round captain medallion, one unified resource rail, gift seal. */
 export function TopHud({
-  name,
-  avatar,
-  avatarUrl,
-  level = 12,
-  progress = 0.62,
-  coins = 125680,
-  rubies = 2450,
-  diamonds = 1280,
-  fishFound = 27,
-  fishTotal = 40,
-  onAvatarClick,
-  onGiftClick,
-  onTopUp,
+  name = "القبطان",
+  avatar = 0,
+  avatarUrl = null,
+  level = 1,
+  rank = "أميرال الأسطول",
+  coins = 0,
+  rubies = 0,
+  diamonds = 0,
+  onOpenStore,
+  onOpenFrameShop,
+  onOpenRewards,
+  hasReward = true,
 }: Props) {
-  const seed = avatar ?? nameSeed(name);
-  const fmt = (n: number) =>
-    n >= 100000 ? `${Math.round(n / 1000)}K` : n.toLocaleString("en-US");
+  const [frameIndex, setFrameIndex] = useState<number>(() => getEquippedFrame());
 
-  const items = [
-    { key: "coins" as const, value: fmt(coins), label: "الذهب", art: coinImg },
-    { key: "rubies" as const, value: fmt(rubies), label: "الياقوت", art: rubyImg },
-    { key: "diamonds" as const, value: fmt(diamonds), label: "الألماس", art: diamondImg },
-  ];
+  useEffect(() => {
+    setFrameIndex(getEquippedFrame());
+    const handler = (e: any) => {
+      if (typeof e.detail?.index === "number") {
+        setFrameIndex(e.detail.index);
+      }
+    };
+    window.addEventListener("c2c:frame_changed", handler);
+    return () => window.removeEventListener("c2c:frame_changed", handler);
+  }, []);
+
+  const theme: LuxuryTheme = useMemo(() => getTheme(frameIndex), [frameIndex]);
 
   return (
-    <div className="tos-hud" dir="rtl">
-      <button type="button" className="tos-medal" aria-label="حساب القبطان" onClick={onAvatarClick}>
-        <svg className="tos-medal-ring" viewBox="0 0 36 36" aria-hidden="true">
-          <circle cx="18" cy="18" r="16" className="tos-ring-bg" />
-          <circle cx="18" cy="18" r="16" className="tos-ring-fg" strokeDasharray={`${progress * 100.5} 100.5`} />
-        </svg>
-        <CosmeticFrame themeIndex={avatar ?? 0} size={56}>
-          <CaptainAvatar seed={seed} url={avatarUrl} className="tos-medal-art w-full h-full object-cover" />
-        </CosmeticFrame>
-        <span className="tos-medal-lvl">{level}</span>
-      </button>
+    <header
+      dir="rtl"
+      className="fixed top-2.5 left-0 right-0 z-40 flex items-center justify-between px-3 sm:px-6 py-2 mx-auto max-w-7xl font-['Cairo'] select-none pointer-events-none"
+    >
+      {/* Right Section: Captain Profile Pill */}
+      <div
+        className="pointer-events-auto flex items-center gap-2.5 sm:gap-3.5 px-3 py-1.5 rounded-full border shadow-2xl backdrop-blur-md transition-all duration-300"
+        style={{
+          background: `linear-gradient(135deg, ${theme.c[0]}ee, ${theme.c[1]}ee)`,
+          borderColor: theme.bd,
+          boxShadow: `0 8px 32px rgba(0,0,0,0.6), 0 0 16px ${theme.gl}`,
+        }}
+      >
+        <div className="relative cursor-pointer" onClick={onOpenFrameShop || onOpenStore} title="تغيير الإطار">
+          <CosmeticFrame themeIndex={frameIndex} size={52}>
+            <div className="w-full h-full bg-[#141b2d] flex items-center justify-center">
+              <CaptainAvatar avatarIndex={avatar} avatarUrl={avatarUrl} size={36} />
+            </div>
+          </CosmeticFrame>
+          <span className="absolute -bottom-1 -left-1 px-1.5 py-0.2 text-[9px] font-black rounded-full bg-amber-400 text-slate-950 border border-amber-200">
+            {level}
+          </span>
+        </div>
 
-      <div className="tos-mid">
-        <span className="tos-name">{name}</span>
-        <div className="tos-rail">
-          {items.map((c) => (
-            <button type="button" key={c.key} className="tos-res" aria-label={`شحن ${c.label}`} onClick={() => onTopUp?.(c.key)}>
-              <img src={c.art} alt="" aria-hidden="true" />
-              <b>{c.value}</b>
-              <Plus className="tos-res-plus" aria-hidden="true" />
-            </button>
-          ))}
-          <span className="tos-res tos-res-fish">
-            <img src={fishImg} alt="" aria-hidden="true" />
-            <b>{fishFound}/{fishTotal}</b>
+        <div className="flex flex-col text-right">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[13px] sm:text-[15px] font-black tracking-wide text-white drop-shadow">
+              {name}
+            </span>
+            <span
+              className="text-[10px] sm:text-[11px] font-extrabold px-1.5 py-0.5 rounded shadow-sm text-slate-950"
+              style={{
+                background: `linear-gradient(${theme.p[0]}, ${theme.p[1]})`,
+              }}
+            >
+              {theme.r}
+            </span>
+          </div>
+          <span className="text-[11px] font-medium text-slate-300 opacity-90">
+            {rank}
           </span>
         </div>
       </div>
 
-      <button type="button" className="tos-seal" aria-label="الهدايا" onClick={onGiftClick}>
-        <Gift aria-hidden="true" />
-      </button>
-    </div>
+      {/* Left Section: Resources Capsules & Action Buttons */}
+      <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2.5">
+        {/* Gold Capsule */}
+        <div
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full border shadow-md backdrop-blur-sm"
+          style={{
+            background: "rgba(15, 23, 42, 0.75)",
+            borderColor: "rgba(245, 158, 11, 0.4)",
+          }}
+        >
+          <span className="text-sm">🪙</span>
+          <span className="text-xs sm:text-sm font-black text-amber-300">
+            {coins.toLocaleString()}
+          </span>
+        </div>
+
+        {/* Rubies Capsule */}
+        <div
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full border shadow-md backdrop-blur-sm"
+          style={{
+            background: "rgba(15, 23, 42, 0.75)",
+            borderColor: "rgba(239, 68, 68, 0.4)",
+          }}
+        >
+          <span className="text-sm">💎</span>
+          <span className="text-xs sm:text-sm font-black text-rose-300">
+            {rubies.toLocaleString()}
+          </span>
+        </div>
+
+        {/* Frame Shop Quick Button */}
+        {onOpenFrameShop && (
+          <button
+            onClick={onOpenFrameShop}
+            title="متجر الإطارات الفاخرة"
+            className="flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-full border border-sky-400/50 bg-sky-950/60 hover:bg-sky-900/80 text-sky-200 transition-all hover:scale-105 active:scale-95 shadow-lg"
+          >
+            👑
+          </button>
+        )}
+
+        {/* Rewards Button */}
+        {onOpenRewards && (
+          <button
+            onClick={onOpenRewards}
+            className="relative flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-full border border-amber-400/60 bg-amber-950/60 hover:bg-amber-900/80 text-amber-200 transition-all hover:scale-105 active:scale-95 shadow-lg"
+          >
+            🎁
+            {hasReward && (
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full animate-ping" />
+            )}
+          </button>
+        )}
+      </div>
+    </header>
   );
 }
+
+export default TopHud;
