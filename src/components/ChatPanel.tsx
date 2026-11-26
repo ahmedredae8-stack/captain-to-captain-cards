@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { CaptainAvatar } from "@/components/GameSprite";
 import { CosmeticFrame } from "@/components/CosmeticFrame";
 import { CosmeticChatBubble } from "@/components/CosmeticChatBubble";
+import { useEquippedFrame } from "@/lib/equippedFrame";
 import { isOnline, timeLabel, type Message, type Player } from "@/lib/player";
 import { playSfx } from "@/lib/sound";
 
@@ -106,25 +107,27 @@ export function ChatPanel({ me, peer }: { me: Player; peer?: Player | null }) {
 
 function Messages({ me, rows, people }: { me: Player; rows: Message[]; people: Record<string, Player> }) {
   const end = useRef<HTMLDivElement>(null);
+  const myEquippedFrame = useEquippedFrame();
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [rows.length]);
   if (!rows.length) return <div className="cp-empty"><strong>ابدأ المحادثة</strong><span>اكتب أول رسالة بالأسفل.</span></div>;
   return (
     <ol className="cp-list">
       {rows.map((m) => {
         const mine = m.sender_id === me.id, p = people[m.sender_id];
+        const senderFrame = mine ? myEquippedFrame : ((p as (Player & { frame_index?: number }) | undefined)?.frame_index ?? 0);
         return (
           <li key={m.id} className={mine ? "cp-msg me flex items-end gap-2 justify-end" : "cp-msg flex items-end gap-2"}>
             {!mine && (
-              <CosmeticFrame themeIndex={p?.avatar_index ?? 0} size={38}>
-                <CaptainAvatar seed={p?.avatar_index ?? 0} url={p?.avatar_url} className="w-full h-full object-cover" />
+              <CosmeticFrame themeIndex={senderFrame} size={38}>
+                <CaptainAvatar seed={p?.avatar_index ?? 0} url={p?.avatar_url} isSelf={false} frameIndex={senderFrame} size={38} className="w-full h-full object-cover" />
               </CosmeticFrame>
             )}
             <CosmeticChatBubble
-              themeIndex={mine ? (me.avatar_index ?? 0) : (p?.avatar_index ?? 0)}
-              playerName={mine ? me.name : (p?.name ?? "قبطان")}
-              message={m.body}
+              themeIndex={senderFrame}
+              name={mine ? me.name : (p?.name ?? "قبطان")}
+              text={m.body}
               time={timeLabel(m.created_at)}
-              isMe={mine}
+              mine={mine}
             />
           </li>
         );
@@ -156,3 +159,13 @@ function Composer({ me, to }: { me: Player; to: Player | null }) {
     </form>
   );
 }
+```[cite: 1, 2]
+
+---
+
+### تعليمات التأكد بعد لصق الكود
+1. **عدم وجود أخطاء في المحرر أو البناء:** تأكد أن استيراد `useEquippedFrame` من `@/lib/equippedFrame` و `CosmeticChatBubble` من `@/components/CosmeticChatBubble` يشتغل بدون أي تحذيرات أو أخطاء[cite: 1, 2].
+2. **تجربة الشات العام والخاص:** افتح تبويب «الميناء العام» و «الرسائل الخاصة»، وأرسل رسالة وتأكد من ظهور الفقاعة الجديدة وشريط الاسم والرتبة والوقت و `✓✓` لرسائلك[cite: 2].
+3. **التحقق من إطار الأفاتار في الشات:** تأكد أن صورتك تظهر بإطارك المجهّز وأن الصور الأخرى لا تتكرر بشكل مزدوج أو مشوه داخل `CosmeticFrame`[cite: 1, 2].
+
+هل ظهر معك أي خطأ في أي خطوة من الخطوات الأربع السابقة؟
