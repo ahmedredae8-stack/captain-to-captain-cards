@@ -65,7 +65,7 @@ export function TopHud({
         <div className="relative cursor-pointer" onClick={onOpenFrameShop || onOpenStore} title="تغيير الإطار">
           <CosmeticFrame themeIndex={frameIndex} size={52}>
             <div className="w-full h-full bg-[#141b2d] flex items-center justify-center">
-              <CaptainAvatar avatarIndex={avatar} avatarUrl={avatarUrl} size={36} />
+              <CaptainAvatar seed={avatar} url={avatarUrl} className="w-full h-full object-cover" />
             </div>
           </CosmeticFrame>
           <span className="absolute -bottom-1 -left-1 px-1.5 py-0.2 text-[9px] font-black rounded-full bg-amber-400 text-slate-950 border border-amber-200">
