@@ -1,11 +1,12 @@
-import { useMemo, useState } from "react";
-import { Check, Crown, Gem, Minus, Plus, Shield, ShipWheel, Swords, Users, X } from "lucide-react";
+import { useMemo, useState, useEffect } from "react";
+import { Check, Crown, Frame, Gem, Minus, Plus, Shield, ShipWheel, Swords, Users, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { GameSprite } from "@/components/GameSprite";
+import { GameSprite, CaptainAvatar } from "@/components/GameSprite";
 import { CREW_ART, CREW_ART_MAP } from "@/lib/art";
 import { CREWS, GEM_PACKS } from "@/lib/items";
 import { CARDS } from "@/components/battle/BattleScreen";
+import { FramesTab } from "@/components/FramesTab";
 
 /** Store prices for battle weapon cards and shield tiers: stronger effects cost more. */
 const CARD_PRICE: Record<string, number> = { cannon: 2_000, harpoon: 6_000, missile: 12_000, mortar: 18_000, fire_barrel: 28_000, frost_shell: 35_000, torpedo: 150 };
@@ -15,7 +16,6 @@ import shieldData from "@/shields/shields.json";
 import SeaScene from "@/components/SeaScene";
 import { resolveShipArtwork } from "@/lib/shipArtwork";
 import { SEA_WORLDS, getSeaWorld, loadSeaWorldId, saveSeaWorldId } from "@/lib/seaWorld";
-import { useEffect } from "react";
 
 type ShieldInfo = { tier: 1 | 2 | 3 | 4 | 5; id: string; name_ar: string; blocks: string[]; hits: number; reflect: number };
 export const SHIELDS = shieldData.shields as unknown as ShieldInfo[];
@@ -52,7 +52,7 @@ import { currentPhase, phaseLabel, themes } from "@/lib/themes";
 import { playSfx } from "@/lib/sound";
 import { useArtworkMap } from "@/lib/artwork";
 
-type StoreTab = "gems" | "crew" | "weapons" | "armor" | "ships" | "worlds";
+type StoreTab = "gems" | "crew" | "weapons" | "armor" | "ships" | "worlds" | "frames";
 type Product = {
   id: string;
   title: string;
@@ -69,9 +69,24 @@ const sectionTitle: Record<StoreTab, string> = {
   armor: "الدروع",
   ships: "السفن",
   worlds: "الخلفيات",
+  frames: "الإطارات الملكية",
 };
 
-export function GameStore({ activeId, onSelect, onClose }: { activeId: string; onSelect: (id: string) => void; onClose: () => void }) {
+export function GameStore({
+  activeId,
+  onSelect,
+  onClose,
+  gold = 0,
+  gems = 0,
+  onSpend,
+}: {
+  activeId: string;
+  onSelect: (id: string) => void;
+  onClose: () => void;
+  gold?: number;
+  gems?: number;
+  onSpend?: (kind: "gold" | "gems", amount: number) => boolean;
+}) {
   const [tab, setTab] = useState<StoreTab>("ships");
   const [shipOpen, setShipOpen] = useState<LiveShip | null>(null);
   const tabs = [
@@ -81,6 +96,7 @@ export function GameStore({ activeId, onSelect, onClose }: { activeId: string; o
     { id: "armor" as const, label: "حماية", icon: Shield },
     { id: "ships" as const, label: "سفن", icon: ShipWheel },
     { id: "worlds" as const, label: "خلفيات", icon: Crown },
+    { id: "frames" as const, label: "إطارات", icon: Frame },
   ];
 
   const art = useArtworkMap();
@@ -93,6 +109,11 @@ export function GameStore({ activeId, onSelect, onClose }: { activeId: string; o
 
     return [];
   }, [tab, art, liveShips]);
+
+  const spend = (kind: "gold" | "gems", amount: number): boolean => {
+    if (onSpend) return onSpend(kind, amount);
+    return false;
+  };
 
   return (
     <div className="game-modal" role="dialog" aria-modal="true" aria-label="المتجر البحري" onClick={onClose}>
@@ -115,6 +136,14 @@ export function GameStore({ activeId, onSelect, onClose }: { activeId: string; o
         <div className="store-body">
           {tab === "worlds" && <SeaWorlds />}
           {tab === "gems" && <GemPacks />}
+          {tab === "frames" && (
+            <FramesTab
+              gold={gold}
+              gems={gems}
+              spend={spend}
+              avatar={<CaptainAvatar url={activeId || undefined} className="h-full w-full object-cover" />}
+            />
+          )}
           {tab === "ships" && (
             <ul className="store-grid">
               {liveShips.map((s) => (
@@ -186,3 +215,11 @@ function ProductPicker({ items }: { items: Product[] }) {
     </>
   );
 }
+```[cite: 4]
+
+### تعليمات التأكد بعد لصق الكود:
+* راجع أن مسار `@/components/FramesTab` مطابق لمكان ملف `FramesTab.tsx` في مشروعك[cite: 4].
+* إذا مرّرت `gold` و `gems` و `onSpend` من المكان الذي يستدعي `<GameStore/>`، فسيعمل الشراء والخصم داخل `FramesTab` مباشرة (وإذا لم يُمرّر `onSpend` فلن يخصم رصيداً بالخطأ).
+* افتح المتجر وتأكد من ظهور تبويب «إطارات» بجانب باقي التبويبات وتجربة التجهيز والمعاينة[cite: 4].
+
+هل ننتقل الآن إلى الخطوة الرابعة (ربط `CosmeticChatBubble.tsx` في الشات/الرسائل)[cite: 2]؟
