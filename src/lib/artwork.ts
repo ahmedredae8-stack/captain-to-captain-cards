@@ -98,3 +98,9 @@ export function useSeaBackground() {
   }, []);
   return bg;
 }
+
+export async function deleteArtwork(subject: string, pose = "idle") {
+  const { error } = await supabase.from("artwork_poses").delete().eq("subject", subject).eq("pose", pose);
+  if (!error) announceArtworkUpdate();
+  return error;
+}
