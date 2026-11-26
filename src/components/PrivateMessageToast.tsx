@@ -87,6 +87,9 @@ export function PrivateMessageToast({ me, onOpenChat }: PrivateMessageToastProps
 
   if (!toast) return null;
 
+  const senderFrameIndex =
+    (toast.sender as Player & { frame_index?: number }).frame_index ?? 0;
+
   return (
     <aside
       className="pm-toast-card"
@@ -114,6 +117,9 @@ export function PrivateMessageToast({ me, onOpenChat }: PrivateMessageToastProps
         <CaptainAvatar
           seed={toast.sender.avatar_index ?? 0}
           url={toast.sender.avatar_url}
+          size={48}
+          frameIndex={senderFrameIndex}
+          isSelf={false}
           className="pm-toast-avatar"
         />
         <div className="pm-toast-content">
@@ -136,3 +142,12 @@ export function PrivateMessageToast({ me, onOpenChat }: PrivateMessageToastProps
     </aside>
   );
 }
+```[cite: 1]
+
+---
+
+### تعليمات التأكد بعد لصق الكود
+1. تأكد من عدم وجود أي أخطاء في المحرر أو البناء على `size` و `frameIndex` و `isSelf` في `CaptainAvatar`[cite: 1].
+2. عند وصول رسالة خاصة جديدة في الإشعار، تأكد أن صورة المرسل تظهر بإطارها الخاص (أو الافتراضي `0` إذا لم يكن لها إطار) وليس بإطارك أنت، وأن زر «فتح المحادثة» وزر الإغلاق يعملان كما كانا[cite: 1].
+
+هل يوجد ملف آخر تحب أن نراجعه أو نعدّله بنفس الطريقة؟
