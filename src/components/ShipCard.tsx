@@ -3,6 +3,8 @@ import { tripLabel, WEAPON_AR, type FleetShip } from "@/lib/fleetCatalog";
 import { collectTrip, countdown, startTrip, useTrips, type Haul } from "@/lib/fishingTrips";
 import { useState } from "react";
 import { playSfx } from "@/lib/sound";
+import { useArtworkMap } from "@/lib/artwork";
+import { resolveShipArtwork } from "@/lib/shipArtwork";
 
 const RARITY_CLASS: Record<string, string> = { "شائع": "r0", "غير شائع": "r1", "نادر": "r2", "ملحمي": "r3", "أسطوري": "r4" };
 
@@ -10,6 +12,7 @@ const RARITY_CLASS: Record<string, string> = { "شائع": "r0", "غير شائ�
 export function ShipCard({ ship, onClose }: { ship: FleetShip & { description?: string }; onClose: () => void }) {
   const d = ship.data;
   const { trips, now } = useTrips();
+  const artwork = useArtworkMap();
   const [haul, setHaul] = useState<Haul[] | null>(null);
   const trip = trips[ship.code];
   const left = trip ? trip.endsAt - now : 0;
@@ -19,7 +22,7 @@ export function ShipCard({ ship, onClose }: { ship: FleetShip & { description?: 
     <div className="shipcard-overlay" role="dialog" aria-modal="true" aria-label={ship.name} onClick={onClose}>
       <section dir="rtl" className="shipcard" onClick={(e) => e.stopPropagation()}>
         <button type="button" className="shipcard-x" aria-label="إغلاق" onClick={onClose}><X /></button>
-        <div className="shipcard-photo"><img src={ship.photo} alt={ship.name} /><span className="shipcard-tier">مستوى {d.tier}</span></div>
+        <div className="shipcard-photo"><img src={resolveShipArtwork(artwork, ship.id, "idle", ship.photo)} alt={ship.name} /><span className="shipcard-tier">مستوى {d.tier}</span></div>
         <h3>{ship.name}</h3>
         {ship.description && <p className="shipcard-desc">{ship.description}</p>}
         <dl className="shipcard-stats">
