@@ -1,37 +1,45 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
+  Download,
+  Eye,
   Flame,
   Hammer,
+  HelpCircle,
   Image as ImageIcon,
+  Layers,
   Loader2,
+  Package,
   RefreshCw,
+  Save,
   Scissors,
   Shield,
+  ShoppingBag,
   Sparkles,
+  Swords,
+  Trash2,
   Upload,
   X,
   Zap,
 } from "lucide-react";
 
 import { supabase } from "@/integrations/supabase/client";
-import { announceArtworkUpdate, isArtworkAdmin } from "@/lib/artwork";
+import { announceArtworkUpdate, isArtworkAdmin, useArtworkMap } from "@/lib/artwork";
+import { fleetCatalog, tripLabel, WEAPON_AR, type FleetShip } from "@/lib/fleetCatalog";
+import { resolveShipArtwork } from "@/lib/shipArtwork";
+import { saveOverride, useLiveShips, type LiveShip } from "@/lib/shipOverrides";
+import { ARMORS, CREWS, WEAPONS } from "@/lib/items";
+import { themes } from "@/lib/themes";
 import { playSfx } from "@/lib/sound";
 
-type EffectMode = "idle" | "damage" | "repair" | "destroy";
+type EffectMode = "shine" | "repair" | "damage" | "destroyed" | "none";
 
-type ExtractedShip = {
-  name: string;
-  blob: Blob;
-  previewUrl: string;
-  width: number;
-  height: number;
-};
+type ShipItem = LiveShip;
 
 /**
- * خوارزمية ذكية مدمجة لحذف الخلفية (البيضاء أو الملونة) وتحويل الصورة إلى PNG شفاف بالكامل.
+ * خوارزمية ذكية متقدمة لإزالة الخلفية (البيضاء أو الملونة) وتحويل الصورة إلى PNG شفاف بالكامل
  */
 async function removeBackgroundSmart(blob: Blob, tolerance = 35): Promise<Blob> {
   const bmp = await createImageBitmap(blob);
@@ -47,10 +55,10 @@ async function removeBackgroundSmart(blob: Blob, tolerance = 35): Promise<Blob> 
   const w = canvas.width;
   const h = canvas.height;
 
-  // فحص ألوان الأركان لتحديد لون الخلفية الغالب
+  // فحص ألوان الأركان والأطراف لتحديد لون الخلفية الغالب
   const samples = [
     [0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1],
-    [Math.floor(w / 2), 0], [0, Math.floor(h / 2)], [w - 1, Math.floor(h / 2)]
+    [Math.floor(w / 2), 0], [0, Math.floor(h / 2)], [w - 1, Math.floor(h / 2)], [Math.floor(w / 2), h - 1]
   ];
 
   let bgR = 0, bgG = 0, bgB = 0, count = 0;
@@ -72,450 +80,1155 @@ async function removeBackgroundSmart(blob: Blob, tolerance = 35): Promise<Blob> 
     bgR = 255; bgG = 255; bgB = 255;
   }
 
-  // حذف بكسلات الخلفية مع تنعيم حواف السفينة (feathering)
+  const tolSq = tolerance * tolerance * 3;
+
   for (let i = 0; i < data.length; i += 4) {
     const a = data[i + 3];
-    if (a < 10) continue;
-    const r = data[i], g = data[i + 1], b = data[i + 2];
-    const dist = Math.sqrt((r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2);
-    if (dist <= tolerance) {
+    if (a < 15) continue;
+
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+
+    const dr = r - bgR;
+    const dg = g - bgG;
+    const db = b - bgB;
+    const distSq = dr * dr + dg * dg + db * db;
+
+    if (distSq < tolSq) {
+      // تفريغ الخلفية تماماً
       data[i + 3] = 0;
-    } else if (dist < tolerance + 16) {
-      const factor = (dist - tolerance) / 16;
-      data[i + 3] = Math.round(a * factor);
+    } else if (distSq < tolSq * 1.6) {
+      // تنعيم الحواف (Antialiasing) لتفادي البقايا
+      const factor = (distSq - tolSq) / (tolSq * 0.6);
+      data[i + 3] = Math.round(a * Math.max(0, Math.min(1, factor)));
     }
   }
 
   ctx.putImageData(imgData, 0, 0);
 
   return new Promise((resolve) => {
-    canvas.toBlob((b) => resolve(b ?? blob), "image/png");
+    canvas.toBlob((b) => resolve(b || blob), "image/png");
   });
 }
 
-/**
- * نافذة استوديو متكاملة لرفع حزم السفن وتطبيق التأثيرات الحية (تلميع، صيانة، ضرر، تفجير)
- * تدعم الرفع المباشر لصور منفردة أو متعددة، وتدعم أيضاً ملفات ZIP المضغوطة، مع حذف الخلفية تلقائياً.
- */
-export function ShipPackageStudio({ onClose }: { onClose?: () => void }) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
+export function ShipPackageStudio() {
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [studioSection, setStudioSection] = useState<"ships" | "store" | "themes">("ships");
+
+  // سفن اللعبة المباشرة
+  const liveShips = useLiveShips(true);
+  const artwork = useArtworkMap();
+
+  // تصفية السفن حسب المستوى (Tier)
+  const [selectedTier, setSelectedTier] = useState<number | "all">("all");
+  const [selectedShipId, setSelectedShipId] = useState<number>(1);
+
+  // حالة الصورة المرفوعة للسفينة المحددة
+  const [uploadedBlob, setUploadedBlob] = useState<Blob | null>(null);
+  const [uploadedPreview, setUploadedPreview] = useState<string>("");
+  const [autoRemoveBg, setAutoRemoveBg] = useState(true);
+  const [bgTolerance, setBgTolerance] = useState(38);
+  const [isProcessingBg, setIsProcessingBg] = useState(false);
+
+  // تعديل خصائص السفينة (الاسم، السعر، الوصف)
+  const [editName, setEditName] = useState("");
+  const [editPrice, setEditPrice] = useState<number>(0);
+  const [editDesc, setEditDesc] = useState("");
+  const [savingOverrides, setSavingOverrides] = useState(false);
+
+  // معاينة التأثيرات التفاعلية
+  const [activeEffect, setActiveEffect] = useState<EffectMode>("shine");
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [loadingAdmin, setLoadingAdmin] = useState(true);
-
-  const [autoRemoveBg, setAutoRemoveBg] = useState(true);
-  const [ships, setShips] = useState<ExtractedShip[]>([]);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [processing, setProcessing] = useState(false);
+  // حالة الرفع والنشر
   const [uploading, setUploading] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: "ok" | "err" | "info" } | null>(null);
 
-  const [currentMode, setCurrentMode] = useState<EffectMode>("idle");
-  const [isEngineLoaded, setIsEngineLoaded] = useState(false);
+  // قسم منتجات المتجر
+  const [storeCategory, setStoreCategory] = useState<"weapons" | "crew" | "armor">("weapons");
+  const [selectedStoreItemId, setSelectedStoreItemId] = useState<string>(WEAPONS[0].id);
+  const [storeUploadedBlob, setStoreUploadedBlob] = useState<Blob | null>(null);
+  const [storeUploadedPreview, setStoreUploadedPreview] = useState<string>("");
+  const [storeUploading, setStoreUploading] = useState(false);
 
+  // فحص صلاحيات الأدمن
   useEffect(() => {
     void isArtworkAdmin()
       .then(setIsAdmin)
-      .finally(() => setLoadingAdmin(false));
+      .catch(() => setIsAdmin(false));
   }, []);
 
-  const selectedShip = ships[selectedIndex] ?? null;
+  // السفن المصفاة حسب المستوى
+  const filteredShips = useMemo(() => {
+    if (selectedTier === "all") return liveShips;
+    return liveShips.filter((s) => s.data.tier === selectedTier);
+  }, [liveShips, selectedTier]);
 
-  // إرسال صورة السفينة المختارة وحالة التأثير لمحرك Canvas
+  // السفينة المحددة حالياً
+  const currentShip = useMemo(() => {
+    return liveShips.find((s) => s.id === selectedShipId) || liveShips[0];
+  }, [liveShips, selectedShipId]);
+
+  // تحديث حقول التعديل عند تغيير السفينة
   useEffect(() => {
-    if (!isEngineLoaded || !iframeRef.current || !selectedShip) return;
-
-    try {
-      iframeRef.current.contentWindow?.postMessage(
-        {
-          type: "SET_SHIP_IMAGE",
-          dataUrl: selectedShip.previewUrl,
-        },
-        "*"
-      );
-    } catch {
-      // إطار معزول
+    if (currentShip) {
+      setEditName(currentShip.name);
+      setEditPrice(currentShip.price);
+      setEditDesc(currentShip.description || "");
+      setUploadedBlob(null);
+      setUploadedPreview("");
     }
-  }, [isEngineLoaded, selectedShip]);
+  }, [currentShip?.id]);
 
-  const applyEffect = (mode: EffectMode) => {
-    setCurrentMode(mode);
-    playSfx("click", 0.6);
-    if (!iframeRef.current) return;
+  // الصورة الحالية للسفينة (من السوبابيز أو الأصلية)
+  const currentShipArtUrl = useMemo(() => {
+    if (!currentShip) return "";
+    return resolveShipArtwork(artwork, currentShip.id, "idle", currentShip.photo);
+  }, [artwork, currentShip]);
 
-    try {
-      iframeRef.current.contentWindow?.postMessage(
-        {
-          type: "SET_EFFECT_MODE",
-          mode,
-        },
+  // إرسال الصورة والحالة إلى محرك التأثيرات (iframe)
+  const syncIframeEffects = (dataUrl: string, mode: EffectMode) => {
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage(
+        { type: "SET_SHIP_IMAGE", dataUrl },
         "*"
       );
-    } catch {
-      // تجاهل
+      iframeRef.current.contentWindow.postMessage(
+        { type: "SET_EFFECT_MODE", mode },
+        "*"
+      );
     }
   };
 
-  /** معالجة الملفات (سواء صور مباشرة أو ملف ZIP) */
-  const handleFilesChosen = async (files: FileList | null) => {
+  // تحديث المعاينة في المحرك عند تغيير التأثير أو الصورة
+  useEffect(() => {
+    const url = uploadedPreview || currentShipArtUrl;
+    if (url) {
+      syncIframeEffects(url, activeEffect);
+    }
+  }, [uploadedPreview, currentShipArtUrl, activeEffect]);
+
+  // معالجة اختيار صورة السفينة (منفردة أو متعددة أو ZIP)
+  const handleShipFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
     if (!files || files.length === 0) return;
-    setProcessing(true);
-    setStatusMsg(null);
-    playSfx("click", 0.7);
+
+    const file = files[0];
+    setStatusMsg({ text: "جاري قراءة ومعالجة صورة السفينة...", type: "info" });
+    setIsProcessingBg(true);
 
     try {
-      const isZip = files.length === 1 && (files[0].name.endsWith(".zip") || files[0].type.includes("zip"));
-      const extracted: ExtractedShip[] = [];
-
-      if (isZip) {
-        // فك حزمة ZIP
-        if (typeof (window as any).JSZip === "undefined") {
-          await new Promise<void>((resolve, reject) => {
-            const script = document.createElement("script");
-            script.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error("تعذّر تحميل مكتبة فك الضغط JSZip"));
-            document.head.appendChild(script);
-          });
-        }
-
-        const zip = await (window as any).JSZip.loadAsync(files[0]);
-        const imageEntries: any[] = [];
-
-        zip.forEach((path: string, entry: any) => {
-          if (!entry.dir && /\.(png|jpe?g|webp)$/i.test(path) && !path.includes("__MACOSX")) {
-            imageEntries.push(entry);
-          }
-        });
-
-        imageEntries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-
-        for (const entry of imageEntries) {
-          let blob = await entry.async("blob");
-          if (autoRemoveBg) {
-            blob = await removeBackgroundSmart(blob);
-          }
-          const previewUrl = URL.createObjectURL(blob);
-          const bmp = await createImageBitmap(blob);
-          extracted.push({
-            name: entry.name.split("/").pop() || entry.name,
-            blob,
-            previewUrl,
-            width: bmp.width,
-            height: bmp.height,
-          });
-        }
-      } else {
-        // رفع صور متعددة أو منفردة مباشرة
-        const fileArr = Array.from(files).filter((f) => /\.(png|jpe?g|webp)$/i.test(f.name));
-        fileArr.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-
-        for (const file of fileArr) {
-          let blob: Blob = file;
-          if (autoRemoveBg) {
-            blob = await removeBackgroundSmart(file);
-          }
-          const previewUrl = URL.createObjectURL(blob);
-          const bmp = await createImageBitmap(blob);
-          extracted.push({
-            name: file.name,
-            blob,
-            previewUrl,
-            width: bmp.width,
-            height: bmp.height,
-          });
-        }
+      let finalBlob: Blob = file;
+      if (autoRemoveBg) {
+        finalBlob = await removeBackgroundSmart(file, bgTolerance);
       }
-
-      if (extracted.length === 0) {
-        setStatusMsg({ text: "لم يتم العثور على صور سفن صالحة.", type: "err" });
-      } else {
-        setShips(extracted);
-        setSelectedIndex(0);
-        setStatusMsg({
-          text: `تم تجهيز ${extracted.length} سفينة بنجاح${autoRemoveBg ? " وإزالة خلفياتها" : ""}. جاهزة للمعاينة والنشر.`,
-          type: "ok",
-        });
-      }
-    } catch (e: any) {
-      setStatusMsg({ text: e.message || "حدث خطأ أثناء معالجة الملفات.", type: "err" });
+      setUploadedBlob(finalBlob);
+      const url = URL.createObjectURL(finalBlob);
+      setUploadedPreview(url);
+      setStatusMsg({
+        text: `تم تجهيز الصورة بنجاح${autoRemoveBg ? " مع تفريغ الخلفية الشفافة" : ""}. يمكنك معاينة التأثيرات ونشرها.`,
+        type: "ok",
+      });
+      playSfx("click", 0.8);
+    } catch (err: any) {
+      setStatusMsg({ text: `تعذر تجهيز الصورة: ${err.message}`, type: "err" });
     } finally {
-      setProcessing(false);
+      setIsProcessingBg(false);
     }
   };
 
-  /** رفع السفن الجاهزة إلى Supabase وتحديث قاعدة البيانات مباشرة */
-  const handleUploadAll = async () => {
-    if (ships.length === 0) return;
+  // إعادة تطبيق حذف الخلفية عند تغيير حساسية التسامح (Tolerance)
+  const reprocessCurrentBg = async () => {
+    if (!uploadedBlob) return;
+    setIsProcessingBg(true);
+    try {
+      const refined = await removeBackgroundSmart(uploadedBlob, bgTolerance);
+      setUploadedBlob(refined);
+      const url = URL.createObjectURL(refined);
+      setUploadedPreview(url);
+      setStatusMsg({ text: `تم تحديث تفريغ الخلفية بحساسية (${bgTolerance}).`, type: "ok" });
+    } catch (e: any) {
+      setStatusMsg({ text: `خطأ في المعالجة: ${e.message}`, type: "err" });
+    } finally {
+      setIsProcessingBg(false);
+    }
+  };
+
+  // حفظ خصائص السفينة (الاسم، السعر، الوصف) في ship_overrides
+  const handleSaveShipOverrides = async () => {
+    if (!currentShip) return;
+    setSavingOverrides(true);
+    setStatusMsg({ text: "جاري حفظ خصائص السفينة...", type: "info" });
+
+    try {
+      const err = await saveOverride({
+        product_id: `ship-${currentShip.id}`,
+        name: editName.trim() || null,
+        price: Number(editPrice) || null,
+        description: editDesc.trim() || null,
+        hidden: currentShip.hidden || false,
+      });
+
+      if (err) throw err;
+
+      setStatusMsg({ text: `تم بنجاح حفظ خصائص (${editName}) وتحديثها لجميع اللاعبين!`, type: "ok" });
+      playSfx("click", 1);
+    } catch (e: any) {
+      setStatusMsg({ text: `فشل حفظ الخصائص: ${e.message}`, type: "err" });
+    } finally {
+      setSavingOverrides(false);
+    }
+  };
+
+  // رفع صورة السفينة وتثبيتها في اللعبة بقاعدة بيانات Supabase
+  const handleUploadShipArtwork = async () => {
+    if (!currentShip || !uploadedBlob) {
+      setStatusMsg({ text: "يرجى اختيار صورة للسفينة أولاً.", type: "err" });
+      return;
+    }
+
     setUploading(true);
-    setStatusMsg({ text: "جاري التحقق من صلاحيات الأدمن والرفع إلى Supabase...", type: "info" });
+    setStatusMsg({ text: "جاري رفع الصورة الشفافة وتحديث قاعدة البيانات...", type: "info" });
     playSfx("click", 0.7);
 
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("يجب تسجيل الدخول بحساب المشرف.");
 
-      if (!user) {
-        throw new Error("يجب أن تكون مسجلاً بحسابك كأدمن لإتمام النشر.");
-      }
+      // 1. رفع الصورة إلى Storage bucket game-artwork
+      const fileName = `ship-${currentShip.id}-${Date.now()}.png`;
+      const storagePath = `${user.id}/${fileName}`;
 
-      let successCount = 0;
-      const targetSlot = "ship_idle";
+      const { error: upErr } = await supabase.storage
+        .from("game-artwork")
+        .upload(storagePath, uploadedBlob, {
+          contentType: "image/png",
+          upsert: true,
+        });
 
-      for (let i = 0; i < ships.length; i++) {
-        const item = ships[i];
-        const fileName = `ship_${Date.now()}_${i}.png`;
-        const storagePath = `${user.id}/${fileName}`;
+      if (upErr) throw new Error(`فشل رفع الصورة إلى التخزين السحابي: ${upErr.message}`);
 
-        const { error: uploadErr } = await supabase.storage
-          .from("game-artwork")
-          .upload(storagePath, item.blob, {
-            contentType: "image/png",
-            upsert: true,
-          });
+      // 2. تحديث جدول artwork_poses للسفينة المحددة
+      // حذف أي سجل idle قديم لنفس السفينة لعدم التكرار
+      await supabase
+        .from("artwork_poses")
+        .delete()
+        .eq("category", "ship")
+        .eq("subject", `ship-${currentShip.id}`)
+        .eq("pose", "idle");
 
-        if (uploadErr) {
-          throw new Error(`فشل رفع الصورة (${item.name}): ${uploadErr.message}`);
-        }
+      // إدراج السجل الجديد المطابق لمخطط قاعدة البيانات
+      const { error: insertErr } = await supabase
+        .from("artwork_poses")
+        .insert({
+          category: "ship",
+          subject: `ship-${currentShip.id}`,
+          pose: "idle",
+          image_path: storagePath,
+          created_by: user.id,
+        });
 
-        // تنظيف السجلات القديمة للسفينة
-        await supabase
-          .from("artwork_poses")
-          .delete()
-          .eq("slot", targetSlot)
-          .eq("variation_id", `custom_${i}`);
+      if (insertErr) throw new Error(`فشل تسجيل الصورة في قاعدة البيانات: ${insertErr.message}`);
 
-        // إدراج سجل العمل الفني
-        const { error: insertErr } = await supabase
-          .from("artwork_poses")
-          .insert({
-            slot: targetSlot,
-            variation_id: `custom_${i}`,
-            image_path: storagePath,
-            source_file: item.name,
-            published: true,
-            created_by: user.id,
-          });
+      // 3. حفظ الخصائص أيضاً إذا تم تعديلها
+      await saveOverride({
+        product_id: `ship-${currentShip.id}`,
+        name: editName.trim() || null,
+        price: Number(editPrice) || null,
+        description: editDesc.trim() || null,
+        hidden: currentShip.hidden || false,
+      });
 
-        if (insertErr) {
-          throw new Error(`فشل تسجيل السفينة بقاعدة البيانات: ${insertErr.message}`);
-        }
-
-        successCount++;
-      }
-
+      // 4. إشعار جميع اللاعبين بالتحديث اللحظي
       await announceArtworkUpdate();
 
       setStatusMsg({
-        text: `تم بنجاح رفع وتثبيت ${successCount} سفينة في اللعبة! ستظهر لجميع اللاعبين فوراً.`,
+        text: `تم بنجاح رفع وتثبيت سفينة (${editName}) في اللعبة! ستظهر لجميع اللاعبين وفي المعارك وسوق السفن فوراً.`,
         type: "ok",
       });
       playSfx("click", 1);
     } catch (err: any) {
-      setStatusMsg({ text: err.message || "فشل النشر.", type: "err" });
+      setStatusMsg({ text: err.message || "حدث خطأ أثناء الرفع.", type: "err" });
     } finally {
       setUploading(false);
     }
   };
 
+  // منتجات المتجر المتاحة
+  const currentStoreItems = useMemo(() => {
+    if (storeCategory === "weapons") return WEAPONS;
+    if (storeCategory === "crew") return CREWS;
+    return ARMORS;
+  }, [storeCategory]);
+
+  const activeStoreItem = useMemo(() => {
+    return currentStoreItems.find((i) => i.id === selectedStoreItemId) || currentStoreItems[0];
+  }, [currentStoreItems, selectedStoreItemId]);
+
+  // رفع وتثبيت صورة منتج المتجر
+  const handleStoreFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    try {
+      const transparent = autoRemoveBg ? await removeBackgroundSmart(file, 35) : file;
+      setStoreUploadedBlob(transparent);
+      setStoreUploadedPreview(URL.createObjectURL(transparent));
+      setStatusMsg({ text: "تم تجهيز صورة المنتج للتثبيت في المتجر.", type: "ok" });
+    } catch (err: any) {
+      setStatusMsg({ text: `تعذر معالجة صورة المنتج: ${err.message}`, type: "err" });
+    }
+  };
+
+  const handlePublishStoreItem = async () => {
+    if (!activeStoreItem || !storeUploadedBlob) {
+      setStatusMsg({ text: "اختر صورة للمنتج أولاً.", type: "err" });
+      return;
+    }
+    setStoreUploading(true);
+    setStatusMsg({ text: "جاري نشر صورة المنتج في المتجر...", type: "info" });
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("يجب تسجيل الدخول بحساب المشرف.");
+
+      const fileName = `store-${activeStoreItem.id}-${Date.now()}.png`;
+      const storagePath = `${user.id}/${fileName}`;
+
+      const { error: upErr } = await supabase.storage
+        .from("game-artwork")
+        .upload(storagePath, storeUploadedBlob, { contentType: "image/png", upsert: true });
+
+      if (upErr) throw upErr;
+
+      const subjectKey = storeCategory === "weapons"
+        ? activeStoreItem.id
+        : `store:${storeCategory === "crew" ? "crew" : "shield"}-${activeStoreItem.id}`;
+
+      // حذف القديم إن وجد
+      await supabase
+        .from("artwork_poses")
+        .delete()
+        .eq("subject", subjectKey)
+        .eq("pose", "idle");
+
+      // استخدام الفئات المتوافقة مع القيود (rocket للمقذوفات والأسلحة والدروع)
+      const category = storeCategory === "weapons" ? "rocket" : "rocket";
+
+      const { error: insErr } = await supabase
+        .from("artwork_poses")
+        .insert({
+          category,
+          subject: subjectKey,
+          pose: "idle",
+          image_path: storagePath,
+          created_by: user.id,
+        });
+
+      if (insErr) throw insErr;
+
+      await announceArtworkUpdate();
+      setStatusMsg({
+        text: `تم بنجاح تحديث ونشر صورة (${activeStoreItem.name}) في المتجر لجميع اللاعبين!`,
+        type: "ok",
+      });
+      playSfx("click", 1);
+    } catch (e: any) {
+      setStatusMsg({ text: `فشل نشر صورة المنتج: ${e.message}`, type: "err" });
+    } finally {
+      setStoreUploading(false);
+    }
+  };
+
   return (
-    <div className="daily-overlay studio-overlay" dir="rtl" role="dialog" aria-modal="true">
-      <div className="daily-panel studio-panel max-w-4xl max-h-[92vh] flex flex-col p-4 bg-slate-900 border border-tos-gold/40 rounded-2xl shadow-2xl overflow-hidden">
-        {/* رأس النافذة */}
-        <header className="flex items-center justify-between pb-3 border-b border-slate-700/60">
-          <div className="flex items-center gap-2.5">
-            <Sparkles className="h-6 w-6 text-tos-gold" />
-            <div>
-              <h2 className="text-lg font-bold text-white leading-tight">استوديو حزم السفن والتأثيرات</h2>
-              <p className="text-xs text-slate-400">ارفع صور السفن (مباشرة أو ZIP) مع حذف الخلفية تلقائياً ومعاينة محرك المعارك</p>
-            </div>
-          </div>
-          {onClose && (
-            <button type="button" onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
-              <X className="h-5 w-5" />
-            </button>
-          )}
-        </header>
-
-        {/* تنبيه صلاحيات الأدمن */}
-        {!loadingAdmin && !isAdmin && (
-          <div className="mt-3 p-2.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span>حسابك الحالي لا يملك صلاحية الأدمن. للمعاينة يمكنك التجربة، لكن النشر في قاعدة البيانات يتطلب حساب الأدمن.</span>
-          </div>
-        )}
-
-        {/* خيارات الرفع وإزالة الخلفية */}
-        <div className="mt-3 p-3 bg-slate-800/60 border border-slate-700 rounded-xl flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              disabled={processing || uploading}
-              onClick={() => fileInputRef.current?.click()}
-              className="px-4 py-2 bg-tos-gold hover:brightness-110 text-slate-950 font-bold text-sm rounded-lg flex items-center gap-2 transition disabled:opacity-50"
-            >
-              {processing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              <span>اختيار صور السفن أو ملف ZIP</span>
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept="image/png,image/jpeg,image/webp,.zip,application/zip"
-              className="hidden"
-              onChange={(e) => void handleFilesChosen(e.target.files)}
-            />
-
-            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={autoRemoveBg}
-                onChange={(e) => setAutoRemoveBg(e.target.checked)}
-                className="rounded border-slate-600 text-tos-gold focus:ring-tos-gold"
-              />
-              <Scissors className="h-3.5 w-3.5 text-tos-gold" />
-              <span>إزالة الخلفية تلقائياً (شفافة PNG)</span>
-            </label>
-          </div>
-
-          {ships.length > 0 && (
-            <button
-              type="button"
-              disabled={uploading || !isAdmin}
-              onClick={handleUploadAll}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-lg flex items-center gap-2 transition disabled:opacity-50"
-            >
-              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              <span>نشر كل السفن باللعبة ({ships.length})</span>
-            </button>
-          )}
-        </div>
-
-        {/* رسائل الحالة */}
-        {statusMsg && (
-          <div
-            className={`mt-2 p-2.5 rounded-lg text-xs flex items-center gap-2 border ${
+    <section className="ship-studio-container" dir="rtl" style={{ marginTop: 12 }}>
+      {/* شريط الإشعارات والرسائل */}
+      {statusMsg && (
+        <div
+          style={{
+            padding: "12px 16px",
+            borderRadius: 8,
+            marginBottom: 16,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            background:
               statusMsg.type === "ok"
-                ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-200"
+                ? "rgba(46, 204, 113, 0.15)"
                 : statusMsg.type === "err"
-                ? "bg-rose-500/15 border-rose-500/40 text-rose-200"
-                : "bg-sky-500/15 border-sky-500/40 text-sky-200"
-            }`}
+                ? "rgba(231, 76, 60, 0.15)"
+                : "rgba(52, 152, 219, 0.15)",
+            border: `1px solid ${
+              statusMsg.type === "ok"
+                ? "#2ecc71"
+                : statusMsg.type === "err"
+                ? "#e74c3c"
+                : "#3498db"
+            }`,
+            color: "#fff",
+            fontSize: 14,
+          }}
+        >
+          {statusMsg.type === "ok" && <CheckCircle2 size={18} color="#2ecc71" />}
+          {statusMsg.type === "err" && <AlertTriangle size={18} color="#e74c3c" />}
+          {statusMsg.type === "info" && <Loader2 size={18} className="animate-spin" color="#3498db" />}
+          <span style={{ flex: 1 }}>{statusMsg.text}</span>
+          <button
+            type="button"
+            onClick={() => setStatusMsg(null)}
+            style={{ background: "transparent", border: "none", color: "#aaa", cursor: "pointer" }}
           >
-            <span>{statusMsg.text}</span>
-          </div>
-        )}
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
-        {/* المعاينة الحية وشريط السفن */}
-        <div className="mt-3 flex-1 grid grid-cols-1 md:grid-cols-3 gap-3 min-h-0">
-          {/* محرك التأثيرات (IFrame) */}
-          <div className="md:col-span-2 relative bg-slate-950 border border-slate-700 rounded-xl overflow-hidden flex flex-col">
-            <div className="p-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-                <ImageIcon className="h-3.5 w-3.5 text-tos-gold" />
-                <span>معاينة المحرك: {selectedShip ? selectedShip.name : "لا توجد سفينة محددة"}</span>
+      {/* التبويبات الرئيسية للاستوديو */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: 12 }}>
+        <button
+          type="button"
+          onClick={() => setStudioSection("ships")}
+          style={{
+            padding: "10px 18px",
+            borderRadius: 8,
+            cursor: "pointer",
+            fontWeight: 700,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: studioSection === "ships" ? "linear-gradient(135deg, #f39c12, #d35400)" : "rgba(255,255,255,0.06)",
+            color: "#fff",
+            border: "none",
+          }}
+        >
+          <Sparkles size={18} /> رفع وتطوير السفن والمستويات
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStudioSection("store")}
+          style={{
+            padding: "10px 18px",
+            borderRadius: 8,
+            cursor: "pointer",
+            fontWeight: 700,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: studioSection === "store" ? "linear-gradient(135deg, #9b59b6, #8e44ad)" : "rgba(255,255,255,0.06)",
+            color: "#fff",
+            border: "none",
+          }}
+        >
+          <ShoppingBag size={18} /> تعديل صور منتجات المتجر
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStudioSection("themes")}
+          style={{
+            padding: "10px 18px",
+            borderRadius: 8,
+            cursor: "pointer",
+            fontWeight: 700,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: studioSection === "themes" ? "linear-gradient(135deg, #2980b9, #2c3e50)" : "rgba(255,255,255,0.06)",
+            color: "#fff",
+            border: "none",
+          }}
+        >
+          <Layers size={18} /> ملف الخلفيات وحريق الجزيرة
+        </button>
+      </div>
+
+      {/* ────────────────── القسم الأول: استوديو السفن والمستويات ────────────────── */}
+      {studioSection === "ships" && (
+        <div>
+          {/* شريط اختيار المستوى (Tier Selector) */}
+          <div style={{ background: "rgba(20, 25, 35, 0.7)", padding: "16px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+              <span style={{ fontWeight: 700, color: "#f1c40f", fontSize: 16 }}>
+                اختر المستوى لتنظيم السفن ورفع صورها:
               </span>
-
-              {/* أزرار اختبار التأثيرات */}
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => applyEffect("idle")}
-                  className={`px-2 py-1 text-xs rounded transition flex items-center gap-1 ${
-                    currentMode === "idle" ? "bg-tos-gold text-slate-950 font-bold" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
-                  }`}
-                >
-                  <Sparkles className="h-3 w-3" />
-                  <span>طبيعي</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyEffect("repair")}
-                  className={`px-2 py-1 text-xs rounded transition flex items-center gap-1 ${
-                    currentMode === "repair" ? "bg-emerald-500 text-white font-bold" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
-                  }`}
-                >
-                  <Hammer className="h-3 w-3" />
-                  <span>إصلاح</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyEffect("damage")}
-                  className={`px-2 py-1 text-xs rounded transition flex items-center gap-1 ${
-                    currentMode === "damage" ? "bg-amber-500 text-slate-950 font-bold" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
-                  }`}
-                >
-                  <Flame className="h-3 w-3" />
-                  <span>ضرر</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyEffect("destroy")}
-                  className={`px-2 py-1 text-xs rounded transition flex items-center gap-1 ${
-                    currentMode === "destroy" ? "bg-rose-600 text-white font-bold" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
-                  }`}
-                >
-                  <Zap className="h-3 w-3" />
-                  <span>تدمير</span>
-                </button>
-              </div>
+              <span style={{ fontSize: 13, color: "#888" }}>
+                إجمالي السفن: {liveShips.length} سفينة
+              </span>
             </div>
 
-            <div className="flex-1 relative w-full h-[320px] md:h-auto min-h-[300px] bg-slate-950">
-              <iframe
-                ref={iframeRef}
-                src="/ship-effects/index.html"
-                title="Ship Effects Canvas Engine"
-                className="w-full h-full border-0"
-                onLoad={() => setIsEngineLoaded(true)}
-              />
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setSelectedTier("all")}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: selectedTier === "all" ? 700 : 500,
+                  background: selectedTier === "all" ? "#f39c12" : "rgba(255,255,255,0.08)",
+                  color: selectedTier === "all" ? "#111" : "#fff",
+                  border: "none",
+                }}
+              >
+                جميع السفن ({liveShips.length})
+              </button>
+
+              {[0, 1, 2, 3, 4, 5].map((t) => {
+                const count = liveShips.filter((s) => s.data.tier === t).length;
+                const tierTitles: Record<number, string> = {
+                  0: "المستوى 0 — زوارق الصياد",
+                  1: "المستوى 1 — قوارب الصيد الساحلية",
+                  2: "المستوى 2 — سفن صيد الأعماق",
+                  3: "المستوى 3 — سفن الصيد التجاري",
+                  4: "المستوى 4 — الفرقاطات والبارجات",
+                  5: "المستوى 5 — السفن الأسطورية والعرش",
+                };
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setSelectedTier(t)}
+                    style={{
+                      padding: "6px 14px",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      fontSize: 13,
+                      fontWeight: selectedTier === t ? 700 : 500,
+                      background: selectedTier === t ? "#f39c12" : "rgba(255,255,255,0.08)",
+                      color: selectedTier === t ? "#111" : "#fff",
+                      border: "none",
+                    }}
+                  >
+                    مستوى {t} ({count})
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* قائمة السفن المرفوعة */}
-          <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-2.5 flex flex-col min-h-0">
-            <span className="text-xs font-bold text-slate-300 mb-2 block">السفن الجاهزة ({ships.length})</span>
-            {ships.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-slate-500 text-xs">
-                <Upload className="h-8 w-8 mb-2 opacity-40" />
-                <p>لم تختر سفناً بعد.</p>
-                <p className="mt-1 text-[11px] text-slate-600">اختر صور PNG أو JPG أو ملف ZIP لبدء التجربة.</p>
+          {/* قائمة السفن في المستوى المختار وبطاقة السفينة الحالية */}
+          <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 20, alignItems: "start" }}>
+            {/* القائمة الجانبية للسفن */}
+            <div style={{ background: "rgba(15, 20, 30, 0.8)", borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", maxHeight: 600, overflowY: "auto", padding: 10 }}>
+              <div style={{ padding: "6px 10px", fontSize: 13, color: "#aaa", borderBottom: "1px solid rgba(255,255,255,0.08)", marginBottom: 8 }}>
+                اختر السفينة المستهدفة:
               </div>
-            ) : (
-              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-                {ships.map((s, idx) => (
-                  <button
-                    key={s.name + idx}
-                    type="button"
-                    onClick={() => {
-                      setSelectedIndex(idx);
-                      playSfx("hover", 0.3);
-                    }}
-                    className={`w-full p-2 rounded-lg flex items-center gap-2.5 transition text-right ${
-                      selectedIndex === idx
-                        ? "bg-slate-800 border border-tos-gold/60 text-white"
-                        : "bg-slate-900/50 hover:bg-slate-800/40 text-slate-400 border border-transparent"
-                    }`}
-                  >
-                    <div className="w-10 h-10 rounded bg-slate-950 border border-slate-700 p-0.5 flex items-center justify-center shrink-0 overflow-hidden">
-                      <img src={s.previewUrl} alt="" className="max-w-full max-h-full object-contain" />
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {filteredShips.map((ship) => {
+                  const isCur = ship.id === selectedShipId;
+                  const thumb = resolveShipArtwork(artwork, ship.id, "idle", ship.photo);
+                  return (
+                    <button
+                      key={ship.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedShipId(ship.id);
+                        playSfx("click", 0.5);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        padding: "8px 10px",
+                        borderRadius: 8,
+                        background: isCur ? "rgba(243, 156, 18, 0.2)" : "rgba(255,255,255,0.03)",
+                        border: isCur ? "1px solid #f39c12" : "1px solid transparent",
+                        cursor: "pointer",
+                        color: "#fff",
+                        textAlign: "right",
+                        width: "100%",
+                      }}
+                    >
+                      <div style={{ width: 44, height: 44, borderRadius: 6, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
+                        <img src={thumb} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                      </div>
+                      <div style={{ flex: 1, overflow: "hidden" }}>
+                        <strong style={{ display: "block", fontSize: 14, textOverflow: "ellipsis", whiteSpace: "nowrap", overflow: "hidden" }}>
+                          {ship.name}
+                        </strong>
+                        <span style={{ fontSize: 12, color: "#888" }}>
+                          مستوى {ship.data.tier} · {ship.data.class_ar}
+                        </span>
+                      </div>
+                      <span style={{ fontSize: 11, color: "#f1c40f" }}>
+                        {ship.price ? `${ship.price.toLocaleString("ar-EG")}` : "مجاناً"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* تفاصيل السفينة المحددة، الرفع، المعاينة، والتعديل */}
+            {currentShip && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                {/* بطاقة معلومات وتعديل السفينة */}
+                <div style={{ background: "rgba(20, 25, 35, 0.7)", padding: 20, borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: 18, color: "#f39c12", display: "flex", alignItems: "center", gap: 8 }}>
+                        <Package size={20} /> تفاصيل وتخصيص ({currentShip.name})
+                      </h3>
+                      <span style={{ fontSize: 12, color: "#888" }}>
+                        معرف السفينة: #{currentShip.id} · المستوى {currentShip.data.tier} · {currentShip.data.class_ar}
+                      </span>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold truncate text-white">{s.name}</p>
-                      <p className="text-[10px] text-slate-500">
-                        {s.width} × {s.height} px
-                      </p>
+
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button
+                        type="button"
+                        onClick={handleSaveShipOverrides}
+                        disabled={savingOverrides}
+                        style={{
+                          padding: "8px 16px",
+                          borderRadius: 6,
+                          background: "#27ae60",
+                          color: "#fff",
+                          fontWeight: 700,
+                          border: "none",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        {savingOverrides ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                        حفظ الخصائص
+                      </button>
                     </div>
-                    <ChevronRight className="h-4 w-4 text-slate-500" />
-                  </button>
-                ))}
+                  </div>
+
+                  {/* تعديل الاسم والسعر والوصف */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 14 }}>
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, color: "#aaa", marginBottom: 6 }}>
+                        اسم السفينة في اللعبة:
+                      </label>
+                      <input
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        style={{
+                          width: "100%",
+                          padding: "8px 12px",
+                          borderRadius: 6,
+                          background: "rgba(0,0,0,0.5)",
+                          border: "1px solid rgba(255,255,255,0.15)",
+                          color: "#fff",
+                        }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, color: "#aaa", marginBottom: 6 }}>
+                        سعر السفينة في السوق (عملات):
+                      </label>
+                      <input
+                        type="number"
+                        value={editPrice}
+                        onChange={(e) => setEditPrice(Number(e.target.value))}
+                        style={{
+                          width: "100%",
+                          padding: "8px 12px",
+                          borderRadius: 6,
+                          background: "rgba(0,0,0,0.5)",
+                          border: "1px solid rgba(255,255,255,0.15)",
+                          color: "#fff",
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ display: "block", fontSize: 12, color: "#aaa", marginBottom: 6 }}>
+                      وصف السفينة أو قصتها (يظهر للاعبين):
+                    </label>
+                    <input
+                      type="text"
+                      value={editDesc}
+                      onChange={(e) => setEditDesc(e.target.value)}
+                      placeholder="أدخل وصفاً مشوقاً للسفينة..."
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px",
+                        borderRadius: 6,
+                        background: "rgba(0,0,0,0.5)",
+                        border: "1px solid rgba(255,255,255,0.15)",
+                        color: "#fff",
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* منطقة رفع الصورة وتفريغ الخلفية الشفافة */}
+                <div style={{ background: "rgba(20, 25, 35, 0.7)", padding: 20, borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
+                  <h4 style={{ margin: "0 0 14px 0", fontSize: 16, color: "#fff", display: "flex", alignItems: "center", gap: 8 }}>
+                    <ImageIcon size={18} color="#f39c12" /> رفع صورة السفينة وحذف الخلفية تلقائياً
+                  </h4>
+
+                  {/* إعدادات حذف الخلفية الشفافة */}
+                  <div style={{ background: "rgba(0,0,0,0.3)", padding: "12px 16px", borderRadius: 8, marginBottom: 16, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 20 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", color: "#fff", fontSize: 13, fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        checked={autoRemoveBg}
+                        onChange={(e) => setAutoRemoveBg(e.target.checked)}
+                      />
+                      <span>حذف وتفريغ الخلفية تلقائياً (تصبح شفافة 100%)</span>
+                    </label>
+
+                    {autoRemoveBg && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 12, color: "#aaa" }}>حساسية التفريغ: {bgTolerance}</span>
+                        <input
+                          type="range"
+                          min="15"
+                          max="65"
+                          step="1"
+                          value={bgTolerance}
+                          onChange={(e) => setBgTolerance(Number(e.target.value))}
+                          style={{ width: 100 }}
+                        />
+                        {uploadedBlob && (
+                          <button
+                            type="button"
+                            onClick={reprocessCurrentBg}
+                            disabled={isProcessingBg}
+                            style={{
+                              padding: "4px 10px",
+                              borderRadius: 4,
+                              background: "rgba(255,255,255,0.1)",
+                              color: "#fff",
+                              border: "none",
+                              fontSize: 12,
+                              cursor: "pointer",
+                            }}
+                          >
+                            تطبيق الحساسية
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* صندوق السحب والإفلات / اختيار الملف */}
+                  <div style={{ border: "2px dashed rgba(243, 156, 18, 0.4)", borderRadius: 10, padding: "24px", textAlign: "center", background: "rgba(0,0,0,0.2)" }}>
+                    <input
+                      type="file"
+                      id="ship-upload-input"
+                      accept="image/png,image/jpeg,image/webp,.zip"
+                      onChange={handleShipFileSelect}
+                      style={{ display: "none" }}
+                    />
+                    <label
+                      htmlFor="ship-upload-input"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "10px 24px",
+                        borderRadius: 8,
+                        background: "linear-gradient(135deg, #f39c12, #e67e22)",
+                        color: "#fff",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        marginBottom: 8,
+                      }}
+                    >
+                      <Upload size={18} /> اختر صورة للسفينة (أو مجلد ZIP)
+                    </label>
+                    <p style={{ margin: 0, fontSize: 12, color: "#888" }}>
+                      يدعم PNG ، JPG ، WebP ، وتفريغ الخلفيات البيضاء والرمادية والملونة لتصبح بدون خلفية.
+                    </p>
+                  </div>
+
+                  {/* معاينة الصورة المرفوعة ومقارنتها */}
+                  {uploadedPreview && (
+                    <div style={{ marginTop: 20, display: "flex", gap: 20, alignItems: "center", background: "rgba(0,0,0,0.4)", padding: 16, borderRadius: 10 }}>
+                      <div
+                        style={{
+                          width: 140,
+                          height: 140,
+                          borderRadius: 8,
+                          /* نمط مربعات الشفافية الشائع للتأكد من خلوها من الخلفية */
+                          backgroundImage:
+                            "linear-gradient(45deg, #222 25%, transparent 25%), linear-gradient(-45deg, #222 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #222 75%), linear-gradient(-45deg, transparent 75%, #222 75%)",
+                          backgroundSize: "16px 16px",
+                          backgroundColor: "#111",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          overflow: "hidden",
+                          border: "1px solid rgba(255,255,255,0.2)",
+                        }}
+                      >
+                        <img src={uploadedPreview} alt="معاينة الشفافية" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                      </div>
+
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#2ecc71", fontWeight: 700, marginBottom: 6 }}>
+                          <CheckCircle2 size={16} /> الصورة جاهزة ومفرغة من الخلفية تماماً!
+                        </div>
+                        <p style={{ margin: "0 0 12px 0", fontSize: 13, color: "#bbb" }}>
+                          يمكنك تجربة تأثيرات اللمعة والإصلاح والتدمير عليها بالأسفل، ثم الضغط على زر التثبيت.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleUploadShipArtwork}
+                          disabled={uploading}
+                          style={{
+                            padding: "10px 24px",
+                            borderRadius: 8,
+                            background: "linear-gradient(135deg, #2ecc71, #27ae60)",
+                            color: "#fff",
+                            fontWeight: 700,
+                            border: "none",
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 8,
+                            fontSize: 15,
+                            boxShadow: "0 4px 14px rgba(46, 204, 113, 0.4)",
+                          }}
+                        >
+                          {uploading ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                          رفع وتثبيت السفينة في اللعبة الآن
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* نافذة معاينة التأثيرات التفاعلية (Canvas Effects) */}
+                <div style={{ background: "rgba(20, 25, 35, 0.7)", padding: 20, borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+                    <h4 style={{ margin: 0, fontSize: 16, color: "#fff", display: "flex", alignItems: "center", gap: 8 }}>
+                      <Sparkles size={18} color="#f1c40f" /> معاينة التأثيرات الحية (محرك القتال والتأثيرات)
+                    </h4>
+
+                    {/* أزرار التبديل بين أوضاع التأثير */}
+                    <div style={{ display: "flex", gap: 6, background: "rgba(0,0,0,0.5)", padding: 4, borderRadius: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => setActiveEffect("shine")}
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: 6,
+                          background: activeEffect === "shine" ? "#f39c12" : "transparent",
+                          color: activeEffect === "shine" ? "#111" : "#aaa",
+                          fontWeight: 700,
+                          border: "none",
+                          cursor: "pointer",
+                          fontSize: 12,
+                        }}
+                      >
+                        اللمعة الذهبية
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveEffect("repair")}
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: 6,
+                          background: activeEffect === "repair" ? "#2ecc71" : "transparent",
+                          color: activeEffect === "repair" ? "#111" : "#aaa",
+                          fontWeight: 700,
+                          border: "none",
+                          cursor: "pointer",
+                          fontSize: 12,
+                        }}
+                      >
+                        الإصلاح والترميم
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveEffect("damage")}
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: 6,
+                          background: activeEffect === "damage" ? "#e67e22" : "transparent",
+                          color: activeEffect === "damage" ? "#111" : "#aaa",
+                          fontWeight: 700,
+                          border: "none",
+                          cursor: "pointer",
+                          fontSize: 12,
+                        }}
+                      >
+                        الضرر والاشتعال
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveEffect("destroyed")}
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: 6,
+                          background: activeEffect === "destroyed" ? "#e74c3c" : "transparent",
+                          color: activeEffect === "destroyed" ? "#fff" : "#aaa",
+                          fontWeight: 700,
+                          border: "none",
+                          cursor: "pointer",
+                          fontSize: 12,
+                        }}
+                      >
+                        التدمير والانفجار
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveEffect("none")}
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: 6,
+                          background: activeEffect === "none" ? "#7f8c8d" : "transparent",
+                          color: activeEffect === "none" ? "#fff" : "#aaa",
+                          fontWeight: 700,
+                          border: "none",
+                          cursor: "pointer",
+                          fontSize: 12,
+                        }}
+                      >
+                        بدون مؤثرات
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* إطار عرض محرك التأثيرات index.html */}
+                  <div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid rgba(255,255,255,0.15)", background: "#060913", height: 380 }}>
+                    <iframe
+                      ref={iframeRef}
+                      src="/ship-effects/index.html"
+                      style={{ width: "100%", height: "100%", border: "none" }}
+                      title="معاينة مؤثرات السفن"
+                    />
+                  </div>
+                </div>
               </div>
             )}
           </div>
         </div>
-      </div>
-    </div>
+      )}
+
+      {/* ────────────────── القسم الثاني: استوديو منتجات المتجر ────────────────── */}
+      {studioSection === "store" && (
+        <div style={{ background: "rgba(20, 25, 35, 0.7)", padding: 20, borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
+          <div style={{ marginBottom: 16 }}>
+            <h3 style={{ margin: "0 0 6px 0", fontSize: 18, color: "#9b59b6", display: "flex", alignItems: "center", gap: 8 }}>
+              <ShoppingBag size={20} /> تخصيص وتعديل صور أي منتج في المتجر بدون استثناء
+            </h3>
+            <p style={{ margin: 0, fontSize: 13, color: "#888" }}>
+              يمكنك رفع وتحديث صور الصواريخ والأسلحة، الدروع والتحصينات، طاقم البحارة والمصلحين. وتظهر لجميع اللاعبين فوراً!
+            </p>
+          </div>
+
+          {/* تبديل فئة المنتج */}
+          <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+            <button
+              type="button"
+              onClick={() => { setStoreCategory("weapons"); setSelectedStoreItemId(WEAPONS[0].id); }}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 6,
+                background: storeCategory === "weapons" ? "#9b59b6" : "rgba(255,255,255,0.08)",
+                color: "#fff",
+                fontWeight: 700,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              🚀 الصواريخ والأسلحة ({WEAPONS.length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setStoreCategory("crew"); setSelectedStoreItemId(CREWS[0].id); }}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 6,
+                background: storeCategory === "crew" ? "#9b59b6" : "rgba(255,255,255,0.08)",
+                color: "#fff",
+                fontWeight: 700,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              👥 طاقم البحارة والمصلحين ({CREWS.length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setStoreCategory("armor"); setSelectedStoreItemId(ARMORS[0].id); }}
+              style={{
+                padding: "8px 16px",
+                borderRadius: 6,
+                background: storeCategory === "armor" ? "#9b59b6" : "rgba(255,255,255,0.08)",
+                color: "#fff",
+                fontWeight: 700,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              🛡️ الدروع والتحصينات ({ARMORS.length})
+            </button>
+          </div>
+
+          {/* شبكة العناصر في الفئة */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12, marginBottom: 20 }}>
+            {currentStoreItems.map((item: any) => {
+              const isSel = item.id === selectedStoreItemId;
+              const storeKey = storeCategory === "weapons" ? item.id : `store:${storeCategory === "crew" ? "crew" : "shield"}-${item.id}`;
+              const customArt = artwork[`${storeKey}:idle`] || artwork[`${item.id}:idle`];
+              const displayImg = customArt || item.icon;
+
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => {
+                    setSelectedStoreItemId(item.id);
+                    setStoreUploadedBlob(null);
+                    setStoreUploadedPreview("");
+                  }}
+                  style={{
+                    padding: 12,
+                    borderRadius: 8,
+                    background: isSel ? "rgba(155, 89, 182, 0.2)" : "rgba(255,255,255,0.03)",
+                    border: isSel ? "1px solid #9b59b6" : "1px solid rgba(255,255,255,0.08)",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ width: 44, height: 44, borderRadius: 6, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>
+                    {displayImg ? (
+                      <img src={displayImg} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                    ) : (
+                      <Shield size={24} color="#9b59b6" />
+                    )}
+                  </div>
+                  <div>
+                    <strong style={{ display: "block", fontSize: 13, color: "#fff" }}>{item.name}</strong>
+                    <span style={{ fontSize: 11, color: "#888" }}>{item.desc || `${item.price} عملة`}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* منطقة رفع وحفظ صورة المنتج المحدد */}
+          {activeStoreItem && (
+            <div style={{ background: "rgba(0,0,0,0.3)", padding: 16, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+              <div>
+                <strong style={{ fontSize: 15, color: "#fff" }}>
+                  تحديث صورة: {activeStoreItem.name}
+                </strong>
+                <p style={{ margin: "4px 0 0 0", fontSize: 12, color: "#aaa" }}>
+                  ارفع صورة جديدة مفرغة الخلفية لتظهر مكان صورة المنتج الحالية في المتجر.
+                </p>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <input
+                  type="file"
+                  id="store-item-upload"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={handleStoreFileSelect}
+                  style={{ display: "none" }}
+                />
+                <label
+                  htmlFor="store-item-upload"
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    background: "rgba(255,255,255,0.1)",
+                    color: "#fff",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontSize: 13,
+                  }}
+                >
+                  <Upload size={16} /> اختيار صورة جديدة
+                </label>
+
+                {storeUploadedPreview && (
+                  <button
+                    type="button"
+                    onClick={handlePublishStoreItem}
+                    disabled={storeUploading}
+                    style={{
+                      padding: "8px 18px",
+                      borderRadius: 6,
+                      background: "#27ae60",
+                      color: "#fff",
+                      fontWeight: 700,
+                      border: "none",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: 13,
+                    }}
+                  >
+                    {storeUploading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    نشر الصورة في المتجر
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ────────────────── القسم الثالث: ملف الخلفيات وحريق الجزيرة ────────────────── */}
+      {studioSection === "themes" && (
+        <div style={{ background: "rgba(20, 25, 35, 0.7)", padding: 20, borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
+          <h3 style={{ margin: "0 0 8px 0", fontSize: 18, color: "#3498db", display: "flex", alignItems: "center", gap: 8 }}>
+            <Layers size={20} /> ملف الخلفيات وأوضاع المشاهد (حريق الجزيرة والنهار والليل)
+          </h3>
+          <p style={{ margin: "0 0 16px 0", fontSize: 13, color: "#aaa" }}>
+            يتم إدارة خلفيات اللعبة عبر ملف <code style={{ color: "#f1c40f" }}>src/lib/themes.ts</code> والذي يدعم:
+          </p>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 14, marginBottom: 20 }}>
+            <div style={{ background: "rgba(0,0,0,0.3)", padding: 14, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)" }}>
+              <strong style={{ color: "#f39c12", display: "block", marginBottom: 6 }}>1. وضعية ضوء الشمس (day)</strong>
+              <span style={{ fontSize: 12, color: "#888" }}>تظهر تلقائياً من الساعة 6 صباحاً حتى 6 مساءً في توقيت اللاعب.</span>
+            </div>
+
+            <div style={{ background: "rgba(0,0,0,0.3)", padding: 14, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)" }}>
+              <strong style={{ color: "#3498db", display: "block", marginBottom: 6 }}>2. وضعية ضوء القمر (night)</strong>
+              <span style={{ fontSize: 12, color: "#888" }}>تظهر تلقائياً من الساعة 6 مساءً حتى 6 صباحاً مع أصوات الأمواج الهادئة.</span>
+            </div>
+
+            <div style={{ background: "rgba(0,0,0,0.3)", padding: 14, borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)" }}>
+              <strong style={{ color: "#e74c3c", display: "block", marginBottom: 6 }}>3. وضعية حريق الجزيرة (burned)</strong>
+              <span style={{ fontSize: 12, color: "#888" }}>تتفعل تلقائياً عندما تتعرض الجزيرة لهجوم أو غارة صواريخ من قراصنة آخرين!</span>
+            </div>
+          </div>
+
+          <div style={{ background: "rgba(0,0,0,0.5)", padding: 16, borderRadius: 8, fontFamily: "monospace", fontSize: 12, color: "#eee", direction: "ltr", overflowX: "auto" }}>
+            {`// نموذج إضافة المشهد المحترق في src/lib/themes.ts:
+export const themes: Theme[] = [
+  {
+    id: "throne-coast",
+    name: "ساحل العرش",
+    day: { video: "", poster: throneCoastImg.url },
+    night: { video: "", poster: throneCoastImg.url },
+    burned: { video: "", poster: "/assets/scenes/throne-coast-burned.jpg" }, // حريق الجزيرة
+    ambient: { day: "waves", night: "night" },
+  },
+];`}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
