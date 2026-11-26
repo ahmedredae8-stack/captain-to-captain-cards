@@ -5,7 +5,7 @@ import {
   getTheme,
   getEquippedFrame,
   setEquippedFrame,
-  LuxuryTheme,
+  type LuxuryTheme,
 } from "@/lib/luxuryCosmetics";
 import { CosmeticFrame } from "@/components/CosmeticFrame";
 
