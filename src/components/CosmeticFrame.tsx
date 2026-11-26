@@ -1,61 +1,65 @@
-// src/components/CosmeticFrame.tsx
-import React, { useMemo } from "react";
-import { getTheme, getThemeIndex, getFrameSVG } from "@/lib/luxuryCosmetics";
+import { memo, useMemo, type ReactNode } from "react";
+import { THEMES, clampTheme, frameSVG } from "../lib/luxuryCosmetics";
 
-type Props = {
-  themeId?: string;
+interface CosmeticFrameProps {
+  /** رقم الثيم 0..20 (0 = الافتراضي الثابت) */
   themeIndex?: number;
+  /** مقاس الإطار كاملاً بالبكسل */
   size?: number;
+  /** صورة القبطان — توضع في ثقب بنسبة 68% وتتمركز تلقائياً. يفضّل <img className="h-full w-full object-cover" /> */
+  children?: ReactNode;
   className?: string;
-  children?: React.ReactNode;
-};
+  title?: string;
+}
 
-export function CosmeticFrame({
-  themeId,
-  themeIndex,
-  size = 64,
-  className = "",
-  children,
-}: Props) {
-  const effectiveIndex = useMemo(() => {
-    if (themeIndex !== undefined) return getThemeIndex(themeIndex);
-    if (themeId !== undefined) return getThemeIndex(themeId);
-    return 0;
-  }, [themeIndex, themeId]);
-
-  const theme = useMemo(() => getTheme(effectiveIndex), [effectiveIndex]);
-  const svgMarkup = useMemo(() => getFrameSVG(effectiveIndex), [effectiveIndex]);
-
+function CosmeticFrameBase({ themeIndex = 0, size = 64, children, className, title }: CosmeticFrameProps) {
+  const i = clampTheme(themeIndex);
+  const svg = useMemo(() => frameSVG(i), [i]);
+  const glow = THEMES[i].gl;
   return (
-    <div
-      className={`relative inline-flex items-center justify-center flex-none ${className}`}
+    <span
+      className={className}
+      title={title}
       style={{
+        position: "relative",
+        display: "inline-block",
+        flex: "none",
         width: size,
         height: size,
-        filter: `drop-shadow(0 4px 8px rgba(0,0,0,0.55)) drop-shadow(0 0 10px ${theme.gl})`,
+        filter:
+          i === 0
+            ? undefined
+            : `drop-shadow(0 4px 8px rgba(0,0,0,.5)) drop-shadow(0 0 ${Math.max(6, size / 10)}px ${glow})`,
       }}
     >
-      {/* Avatar aperture perfectly centered at 68% */}
-      <div
-        className="absolute rounded-full overflow-hidden flex items-center justify-center pointer-events-auto"
+      <span
         style={{
-          width: "68%",
-          height: "68%",
+          position: "absolute",
           left: "16%",
           top: "16%",
-          boxShadow: "inset 0 0 0 2px rgba(255,255,255,0.25)",
+          width: "68%",
+          height: "68%",
+          borderRadius: "50%",
+          overflow: "hidden",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
         }}
       >
         {children}
-      </div>
-
-      {/* SVG Frame Layer with animations */}
-      <div
-        className="absolute inset-0 w-full h-full pointer-events-none select-none overflow-visible [&>svg]:w-full [&>svg]:h-full [&>svg]:overflow-visible"
-        dangerouslySetInnerHTML={{ __html: svgMarkup }}
-      />
-    </div>
+      </span>
+      <span aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none" }} dangerouslySetInnerHTML={{ __html: svg }} />
+    </span>
   );
 }
+export const CosmeticFrame = memo(CosmeticFrameBase);
 
-export default CosmeticFrame;
+/** أفاتار مؤقت للمعاينة فقط */
+export function AvatarPlaceholder() {
+  return (
+    <span style={{ position: "relative", display: "block", width: "100%", height: "100%", background: "linear-gradient(#4a4580,#27234e)" }}>
+      <span style={{ position: "absolute", left: "35%", top: "20%", width: "30%", height: "30%", borderRadius: "50%", background: "#9a94d6" }} />
+      <span style={{ position: "absolute", left: "18%", top: "57%", width: "64%", height: "50%", borderRadius: "50% 50% 0 0", background: "#9a94d6" }} />
+    </span>
+  );
+}
