@@ -1,104 +1,72 @@
-// src/components/CosmeticChatBubble.tsx
-import React, { useMemo } from "react";
-import { getTheme, LuxuryTheme } from "@/lib/luxuryCosmetics";
-import { CosmeticFrame } from "@/components/CosmeticFrame";
+import type { CSSProperties, ReactNode } from "react";
+import { RANK_ICON, THEMES, bubbleStyle, clampTheme } from "../lib/luxuryCosmetics";
 
-type Props = {
-  themeId?: string;
+const CSS = `@keyframes ccb-sw{0%{transform:translateX(-90px)}60%,100%{transform:translateX(520px)}}
+.ccb-sw{animation:ccb-sw 4.5s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.ccb-sw{animation:none}}`;
+
+interface Props {
   themeIndex?: number;
-  playerName: string;
-  message: string;
+  name: string;
+  text: ReactNode;
   time?: string;
-  isMe?: boolean;
-  avatarSeed?: number;
-  avatarUrl?: string | null;
+  /** رسالتي أنا (تظهر على الجهة المقابلة مع ✓✓) */
+  mine?: boolean;
+  /** رسالة سريعة للمعارك (خط أكبر) */
   quick?: boolean;
-};
+  /** مكان الأفاتار (مثلاً <CaptainAvatar />) — اختياري */
+  avatar?: ReactNode;
+}
 
-const RARITY_ICONS: Record<string, string> = {
-  "أسطوري": "👑",
-  "ملحمي": "⚔️",
-  "نادر": "⚓",
-  "قبطان": "🧭",
-};
-
-export function CosmeticChatBubble({
-  themeId,
-  themeIndex = 0,
-  playerName,
-  message,
-  time,
-  isMe = false,
-  avatarSeed,
-  avatarUrl,
-  quick = false,
-}: Props) {
-  const theme: LuxuryTheme = useMemo(() => getTheme(themeId ?? themeIndex), [themeId, themeIndex]);
-
+export function CosmeticChatBubble({ themeIndex = 0, name, text, time, mine = false, quick = false, avatar }: Props) {
+  const i = clampTheme(themeIndex);
+  const t = THEMES[i];
+  const animated = i !== 0;
+  const tag: CSSProperties = {
+    position: "absolute",
+    top: 0,
+    [mine ? "left" : "right"]: 20,
+    zIndex: 2,
+    display: "flex",
+    gap: 6,
+    alignItems: "center",
+    padding: "1px 22px",
+    fontSize: 12,
+    fontWeight: 900,
+    whiteSpace: "nowrap",
+    background: `linear-gradient(${t.p[0]},${t.p[1]})`,
+    color: t.p[2],
+    clipPath: "polygon(0 0,100% 0,calc(100% - 10px) 50%,100% 100%,0 100%,10px 50%)",
+  };
+  const body: CSSProperties = {
+    position: "relative",
+    overflow: "hidden",
+    padding: quick ? "18px 20px 6px" : "20px 16px 8px",
+    borderRadius: mine ? "18px 18px 18px 5px" : "18px 18px 5px 18px",
+    boxShadow: `inset 0 0 0 3px rgba(255,255,255,.16), 0 0 15px ${t.gl}`,
+    ...bubbleStyle(i),
+  };
   return (
-    <div
-      dir="rtl"
-      className={`relative flex items-end gap-2.5 my-2.5 font-['Cairo'] ${
-        isMe ? "justify-start flex-row-reverse" : "justify-start"
-      }`}
-    >
-      {!isMe && (
-        <div className="flex-none mb-1">
-          <CosmeticFrame themeIndex={themeIndex} size={46}>
-            <div className="w-full h-full bg-[#201d40] flex items-center justify-center text-xs">
-              {avatarUrl ? (
-                <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
-              ) : (
-                <span>⚓</span>
-              )}
-            </div>
-          </CosmeticFrame>
+    <div dir="rtl" style={{ display: "flex", gap: 12, alignItems: "flex-end", justifyContent: mine ? "flex-end" : "flex-start" }}>
+      {!mine && avatar}
+      <div style={{ position: "relative", paddingTop: 15, maxWidth: 380 }}>
+        {animated && <style href="cosmetic-chat-bubble" precedence="medium">{CSS}</style>}
+        <div style={tag}>
+          <span>{RANK_ICON[t.r]}</span>
+          {name}
         </div>
-      )}
-
-      <div className="relative max-w-[85%] sm:max-w-[420px] pt-3.5">
-        <div
-          className={`absolute top-0 z-10 flex items-center gap-1.5 px-4 py-0.5 text-[11px] font-black whitespace-nowrap shadow-md ${
-            isMe ? "left-4" : "right-4"
-          }`}
-          style={{
-            background: `linear-gradient(${theme.p[0]}, ${theme.p[1]})`,
-            color: theme.p[2] || "#000",
-            clipPath: isMe
-              ? "polygon(0 0, 100% 0, 100% 100%, 0 100%, 7px 50%)"
-              : "polygon(0 0, 100% 0, calc(100% - 7px) 50%, 100% 100%, 0 100%)",
-          }}
-        >
-          <span className="text-[10px]">{RARITY_ICONS[theme.r] || "⚓"}</span>
-          <span>{playerName}</span>
-        </div>
-
-        <div
-          className={`relative overflow-hidden px-4 py-3 rounded-2xl shadow-xl transition-all ${
-            isMe ? "rounded-bl-sm" : "rounded-br-sm"
-          }`}
-          style={{
-            background:
-              theme.bub ||
-              `linear-gradient(135deg, ${theme.c[0]}, ${theme.c[1]})`,
-            border: `2px solid ${theme.bd}`,
-            boxShadow: `0 0 16px ${theme.gl}, 0 4px 12px rgba(0,0,0,0.4)`,
-            color: "#fff",
-          }}
-        >
-          <i
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              background: "linear-gradient(rgba(255,255,255,0.2), transparent 45%)",
-            }}
-          />
-          <p className="relative z-10 text-[14px] sm:text-[15px] font-bold leading-relaxed break-words">
-            {message}
-          </p>
-
+        <div style={body}>
+          {animated && (
+            <>
+              <span style={{ position: "absolute", inset: 0, background: "linear-gradient(rgba(255,255,255,.24),transparent 48%)", pointerEvents: "none" }} />
+              <span className="ccb-sw" style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: 60, background: "linear-gradient(100deg,transparent,rgba(255,255,255,.4),transparent)", pointerEvents: "none" }} />
+            </>
+          )}
+          <p style={{ position: "relative", margin: 0, fontSize: quick ? 21 : 16, fontWeight: 700, lineHeight: 1.5 }}>{text}</p>
           {time && (
-            <time className="relative z-10 block mt-1 text-[10px] font-medium opacity-75 text-left">
-              {time} {isMe && "✓✓"}
+            <time style={{ position: "relative", display: "block", marginTop: 3, textAlign: "left", fontSize: 10.5, fontWeight: 600, opacity: 0.7 }}>
+              {time}
+              {mine ? " ✓✓" : ""}
             </time>
           )}
         </div>
@@ -106,5 +74,3 @@ export function CosmeticChatBubble({
     </div>
   );
 }
-
-export default CosmeticChatBubble;
