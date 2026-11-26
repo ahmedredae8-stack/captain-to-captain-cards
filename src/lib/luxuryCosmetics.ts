@@ -1,6 +1,6 @@
 /**
- * luxuryCosmetics.ts — محرك الثيمات الفاخرة (21 ثيم: 0 = الافتراضي + 20 فاخر)
- * لا يعتمد على أي مكتبة. frameSVG(i) يرجّع SVG مستقل (viewBox 0 0 200 200، فتحة الأفاتار 136px = 68%).
+- luxuryCosmetics.ts — محرك الثيمات الفاخرة (21 ثيم: 0 = الافتراضي + 20 فاخر)
+- لا يعتمد على أي مكتبة. frameSVG(i) يرجّع SVG مستقل (viewBox 0 0 200 200، فتحة الأفاتار 136px = 68%).
  */
 import type { CSSProperties } from "react";
 
@@ -108,8 +108,10 @@ export function bubbleStyle(index: number): CSSProperties {
 // توافقية مع باقي مكونات التطبيق (LuxuryPlayerProfile, FrameShopModal, TopHud)
 export const LUXURY_THEMES = THEMES;
 export type LuxuryTheme = Theme;
+export const LuxuryTheme = {};
+
 export function getTheme(index: number): Theme {
-  return THEMES[clampTheme(index)];
+  return THEMES[clampTheme(index)] ?? THEMES[0];
 }
 
 const KEY_EQ = "cosmetic.frame.equipped";
