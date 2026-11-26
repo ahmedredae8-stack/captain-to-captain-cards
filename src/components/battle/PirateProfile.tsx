@@ -420,6 +420,55 @@ export function PirateProfile({ player, isMe, live, onClose, onMessage, onOpenCh
                 setSelectedShipId(s.id);
               }}
             >
+              {/* تموج ورغوة الماء تحت السفينة العائمة */}
+              {!s.sunk && <div className="water-wake-ripple" />}
+
+              {/* الأزرار الثلاثة الملكية فوق السفينة المحددة تماماً */}
+              {isSelected && !s.sunk && (
+                <div className="enemy-ship-floating-balloon" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="balloon-btn attack"
+                    title="هجوم بالسلاح"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      playCustomAudio("click");
+                      setModal("attack");
+                    }}
+                  >
+                    <Swords size={14} />
+                    <span>هجوم</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="balloon-btn plunder"
+                    title="نهب وسرقة"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      playCustomAudio("click");
+                      setModal("plunder");
+                    }}
+                  >
+                    <Anchor size={14} />
+                    <span>سرقة</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="balloon-btn support"
+                    title="دعم وإسناد"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      playCustomAudio("click");
+                      setModal("support");
+                    }}
+                  >
+                    <Users size={14} />
+                    <span>دعم</span>
+                  </button>
+                </div>
+              )}
               {/* Fallback Hull (visible if WebGL canvas is still loading) */}
               <div className="ship-fallback-hull">
                 <img
@@ -461,7 +510,7 @@ export function PirateProfile({ player, isMe, live, onClose, onMessage, onOpenCh
       </div>
 
       {/* FLOATING ACTION DOCK: 3 ROYAL BUTTONS (ATTACK, PLUNDER, SUPPORT) */}
-      {target && !target.sunk && (
+      {false && target && !target.sunk && (
         <div className="enemy-action-dock">
           <div className="enemy-action-bar daily-panel">
             <button
