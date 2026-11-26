@@ -4,6 +4,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ShipCard } from "@/components/ShipCard";
 import { tripLabel } from "@/lib/fleetCatalog";
 import { useLiveShips, type LiveShip } from "@/lib/shipOverrides";
+import { useArtworkMap } from "@/lib/artwork";
+import { resolveShipArtwork } from "@/lib/shipArtwork";
 import { playSfx } from "@/lib/sound";
 
 export const Route = createFileRoute("/shipyard")({
@@ -22,6 +24,7 @@ export const Route = createFileRoute("/shipyard")({
 
 export function Shipyard() {
   const ships = useLiveShips();
+  const artwork = useArtworkMap();
   const [open, setOpen] = useState<LiveShip | null>(null);
   return (
     <div dir="rtl" className="tos-yard">
@@ -30,7 +33,7 @@ export function Shipyard() {
           <li key={s.key}>
             <button type="button" className="tos-yard-card" onClick={() => { playSfx("click", 0.6); setOpen(s); }}>
               <span className="tos-yard-tier">م{s.data.tier}</span>
-              <img src={s.photo} alt="" loading="lazy" />
+              <img src={resolveShipArtwork(artwork, s.id, "idle", s.photo)} alt="" loading="lazy" />
               <strong>{s.name}</strong>
               <small>{s.data.class_ar} · رحلة {tripLabel(s.tripSeconds)}</small>
             </button>
