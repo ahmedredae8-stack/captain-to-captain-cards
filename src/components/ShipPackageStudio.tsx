@@ -11,7 +11,7 @@ import {
   Image as ImageIcon,
   Layers,
   Loader2,
-  Package,
+  Package, Plus,
   RefreshCw,
   Save,
   Scissors,
@@ -26,10 +26,10 @@ import {
 } from "lucide-react";
 
 import { supabase } from "@/integrations/supabase/client";
-import { announceArtworkUpdate, isArtworkAdmin, useArtworkMap } from "@/lib/artwork";
+import { announceArtworkUpdate, deleteArtwork, isArtworkAdmin, useArtworkMap } from "@/lib/artwork";
 import { fleetCatalog, tripLabel, WEAPON_AR, type FleetShip } from "@/lib/fleetCatalog";
 import { resolveShipArtwork } from "@/lib/shipArtwork";
-import { saveOverride, useLiveShips, type LiveShip } from "@/lib/shipOverrides";
+import { deleteOverride, saveOverride, useLiveShips, type LiveShip } from "@/lib/shipOverrides";
 import { ARMORS, CREWS, WEAPONS } from "@/lib/items";
 import { themes } from "@/lib/themes";
 import { playSfx } from "@/lib/sound";
@@ -43,13 +43,28 @@ type ShipItem = LiveShip;
  */
 async function removeBackgroundSmart(blob: Blob, tolerance = 35): Promise<Blob> {
   const bmp = await createImageBitmap(blob);
-  const canvas = document.createElement("canvas");
-  canvas.width = bmp.width;
-  canvas.height = bmp.height;
+  
+  // تصغير الأبعاد لتسريع المعالجة والرفع إذا كانت الصورة ضخمة
+  const MAX_DIM = 640;
+  let targetW = bmp.width;
+  let targetH = bmp.height;
+  if (targetW > MAX_DIM || targetH > MAX_DIM) {
+    if (targetW > targetH) {
+      targetH = Math.round((targetH * MAX_DIM) / targetW);
+      targetW = MAX_DIM;
+    } else {
+      targetW = Math.round((targetW * MAX_DIM) / targetH);
+      targetH = MAX_DIM;
+    }
+  }
+
+  const canvas = document.createElement(canvas);
+  canvas.width = targetW;
+  canvas.height = targetH;
   const ctx = canvas.getContext("2d");
   if (!ctx) return blob;
 
-  ctx.drawImage(bmp, 0, 0);
+  ctx.drawImage(bmp, 0, 0, targetW, targetH);
   const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const data = imgData.data;
   const w = canvas.width;
@@ -96,10 +111,8 @@ async function removeBackgroundSmart(blob: Blob, tolerance = 35): Promise<Blob> 
     const distSq = dr * dr + dg * dg + db * db;
 
     if (distSq < tolSq) {
-      // تفريغ الخلفية تماماً
       data[i + 3] = 0;
     } else if (distSq < tolSq * 1.6) {
-      // تنعيم الحواف (Antialiasing) لتفادي البقايا
       const factor = (distSq - tolSq) / (tolSq * 0.6);
       data[i + 3] = Math.round(a * Math.max(0, Math.min(1, factor)));
     }
@@ -576,16 +589,8 @@ export function ShipPackageStudio() {
                 جميع السفن ({liveShips.length})
               </button>
 
-              {[0, 1, 2, 3, 4, 5].map((t) => {
+              {availableTiers.map((t) => {
                 const count = liveShips.filter((s) => s.data.tier === t).length;
-                const tierTitles: Record<number, string> = {
-                  0: "المستوى 0 — زوارق الصياد",
-                  1: "المستوى 1 — قوارب الصيد الساحلية",
-                  2: "المستوى 2 — سفن صيد الأعماق",
-                  3: "المستوى 3 — سفن الصيد التجاري",
-                  4: "المستوى 4 — الفرقاطات والبارجات",
-                  5: "المستوى 5 — السفن الأسطورية والعرش",
-                };
                 return (
                   <button
                     key={t}
@@ -606,6 +611,26 @@ export function ShipPackageStudio() {
                   </button>
                 );
               })}
+              <button
+                type="button"
+                onClick={() => setShowAddShipModal(true)}
+                style={{
+                  padding: "6px 16px",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: 800,
+                  background: "linear-gradient(135deg, #2ecc71, #27ae60)",
+                  color: "#fff",
+                  border: "none",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  boxShadow: "0 2px 8px rgba(46, 204, 113, 0.4)",
+                }}
+              >
+                <Plus size={15} /> إضافة سفينة / مستوى جديد
+              </button>
             </div>
           </div>
 
@@ -1157,6 +1182,27 @@ export function ShipPackageStudio() {
                 >
                   <Upload size={16} /> اختيار صورة جديدة
                 </label>
+                <button
+                  type="button"
+                  onClick={handleResetStoreItemArt}
+                  disabled={storeUploading}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    background: "rgba(230, 126, 34, 0.2)",
+                    border: "1px solid #e67e22",
+                    color: "#e67e22",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontSize: 13,
+                  }}
+                >
+                  <RefreshCw size={15} /> تعطيل الصورة المخصصة واستعادة الأصلية
+                </button>
+
 
                 {storeUploadedPreview && (
                   <button
@@ -1229,6 +1275,194 @@ export const themes: Theme[] = [
           </div>
         </div>
       )}
+
+      {/* ────────────────── نافذة منبثقة: إضافة سفينة أو مستوى جديد ────────────────── */}
+      {showAddShipModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setShowAddShipModal(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.75)",
+            backdropFilter: "blur(6px)",
+            padding: 16,
+            overflowY: "auto",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(560px, 100%)",
+              background: "linear-gradient(180deg, #182236 0%, #0d1422 100%)",
+              border: "2px solid #2ecc71",
+              borderRadius: 16,
+              padding: 24,
+              boxShadow: "0 20px 50px rgba(0,0,0,0.8), 0 0 30px rgba(46, 204, 113, 0.2)",
+              color: "#fff",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: 10 }}>
+              <h3 style={{ margin: 0, fontSize: 18, color: "#2ecc71", display: "flex", alignItems: "center", gap: 8 }}>
+                <Plus size={20} /> إضافة سفينة جديدة وتحديد مستواها
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowAddShipModal(false)}
+                style={{ background: "transparent", border: "none", color: "#aaa", cursor: "pointer", fontSize: 18 }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#aaa", marginBottom: 4 }}>المستوى (Tier):</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="20"
+                  value={newShipTier}
+                  onChange={(e) => setNewShipTier(Number(e.target.value))}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: 6, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff" }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#aaa", marginBottom: 4 }}>اسم السفينة:</label>
+                <input
+                  type="text"
+                  placeholder="مثال: غضب المحيط الملكي"
+                  value={newShipName}
+                  onChange={(e) => setNewShipName(e.target.value)}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: 6, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff" }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#aaa", marginBottom: 4 }}>الفئة البحرية:</label>
+                <input
+                  type="text"
+                  value={newShipClass}
+                  onChange={(e) => setNewShipClass(e.target.value)}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: 6, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff" }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#aaa", marginBottom: 4 }}>العملة والسعر:</label>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="number"
+                    value={newShipPrice}
+                    onChange={(e) => setNewShipPrice(Number(e.target.value))}
+                    style={{ flex: 1, padding: "8px 10px", borderRadius: 6, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff" }}
+                  />
+                  <select
+                    value={newShipCurrency}
+                    onChange={(e) => setNewShipCurrency(e.target.value as any)}
+                    style={{ padding: "8px", borderRadius: 6, background: "rgba(0,0,0,0.7)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff" }}
+                  >
+                    <option value="gold">🪙 ذهب</option>
+                    <option value="gem">💎 جواهر</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#aaa", marginBottom: 4 }}>نقاط الصحة (HP):</label>
+                <input
+                  type="number"
+                  value={newShipHp}
+                  onChange={(e) => setNewShipHp(Number(e.target.value))}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: 6, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff" }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#aaa", marginBottom: 4 }}>السرعة (عقدة):</label>
+                <input
+                  type="number"
+                  value={newShipSpeed}
+                  onChange={(e) => setNewShipSpeed(Number(e.target.value))}
+                  style={{ width: "100%", padding: "8px 10px", borderRadius: 6, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff" }}
+                />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: "block", fontSize: 12, color: "#aaa", marginBottom: 4 }}>وصف السفينة أو قصتها:</label>
+              <textarea
+                rows={2}
+                placeholder="وصف مشوق للسفينة يظهر في المتجر والأسطول..."
+                value={newShipDesc}
+                onChange={(e) => setNewShipDesc(e.target.value)}
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 6, background: "rgba(0,0,0,0.5)", border: "1px solid rgba(255,255,255,0.2)", color: "#fff" }}
+              />
+            </div>
+
+            {/* اختيار صورة السفينة مع إزالة الخلفية السريعة */}
+            <div style={{ marginBottom: 16, background: "rgba(0,0,0,0.3)", padding: 12, borderRadius: 8, border: "1px dashed rgba(46, 204, 113, 0.4)" }}>
+              <label style={{ display: "block", fontSize: 12, color: "#2ecc71", fontWeight: 700, marginBottom: 6 }}>
+                صورة السفينة (تفريغ فوري شفاف):
+              </label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  const transparent = await removeBackgroundSmart(f, 35);
+                  setNewShipBlob(transparent);
+                  setNewShipPreview(URL.createObjectURL(transparent));
+                }}
+                style={{ color: "#aaa", fontSize: 12 }}
+              />
+              {newShipPreview && (
+                <div style={{ marginTop: 8, width: 64, height: 64, background: "#111", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.2)" }}>
+                  <img src={newShipPreview} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => setShowAddShipModal(false)}
+                style={{ padding: "8px 16px", borderRadius: 6, background: "rgba(255,255,255,0.1)", color: "#fff", border: "none", cursor: "pointer" }}
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateNewShip}
+                disabled={creatingShip}
+                style={{
+                  padding: "8px 22px",
+                  borderRadius: 6,
+                  background: "linear-gradient(135deg, #2ecc71, #27ae60)",
+                  color: "#fff",
+                  fontWeight: 700,
+                  border: "none",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                {creatingShip ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                حفظ ونشر السفينة
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </section>
   );
 }
