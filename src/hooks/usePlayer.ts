@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { savePlayerId, touchPresence, type Player } from "@/lib/player";
 
-/** Loads the signed-in captain and keeps their presence fresh. */
+/** Loads the signed-in captain and keeps their presence and realtime balance fresh. */
 export function usePlayer() {
   const [player, setPlayer] = useState<Player | null>(null);
   const [loading, setLoading] = useState(true);
@@ -31,6 +31,34 @@ export function usePlayer() {
     });
     return () => sub.subscription.unsubscribe();
   }, [refresh]);
+
+  // اشتراك Realtime لحظي مع جدول players لتحديث العملات والجواهر فور تعديلها من Supabase
+  useEffect(() => {
+    if (!player?.id) return;
+    const channel = supabase
+      .channel(`realtime:player:${player.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "players",
+          filter: `id=eq.${player.id}`,
+        },
+        (payload) => {
+          if (payload.new && typeof payload.new === "object") {
+            setPlayer((prev) => (prev ? { ...prev, ...(payload.new as any) } : (payload.new as any)));
+          } else {
+            void refresh();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [player?.id, refresh]);
 
   useEffect(() => {
     if (!player) return;
