@@ -10,6 +10,7 @@ import { TribesPage } from "@/routes/tribes";
 import { GameWindow } from "@/components/GameWindow";
 import { TradingFloor } from "@/components/TradingFloor";
 import { TopHud } from "@/components/TopHud";
+import { FrameShopModal } from "@/components/FrameShopModal";
 import { DailyReward } from "@/components/DailyReward";
 import { PrivateMessageToast } from "@/components/PrivateMessageToast";
 import { QuestBoard } from "@/components/QuestBoard";
@@ -84,6 +85,7 @@ function Index() {
   const [intro, setIntro] = useState(true);
   const [themeId, setThemeId] = useState(defaultTheme.id);
   const [shopOpen, setShopOpen] = useState(false);
+  const [frameShopOpen, setFrameShopOpen] = useState(false);
   const [royale, setRoyale] = useState(false);
   const [questsOpen, setQuestsOpen] = useState(false);
   const [win, setWin] = useState<Win>(null);
@@ -225,8 +227,13 @@ function Index() {
           name={player?.name ?? "قبطان"}
           avatar={player?.avatar_index}
           avatarUrl={player?.avatar_url}
+          coins={(player as any)?.coins ?? (player as any)?.gold ?? 100000}
+          rubies={(player as any)?.rubies ?? (player as any)?.ruby ?? 500}
+          diamonds={(player as any)?.diamonds ?? (player as any)?.diamond ?? (player as any)?.gems ?? 150}
           onAvatarClick={() => open("settings")}
           onGiftClick={() => setQuestsOpen(true)}
+          onOpenRewards={() => setQuestsOpen(true)}
+          onOpenFrameShop={() => setFrameShopOpen(true)}
           onTopUp={() => { playSfx("click", 0.7); setShopOpen(true); }}
         />
       </div>
@@ -249,6 +256,7 @@ function Index() {
       {royale && <KingOfSeas player={player} playerName={player?.name ?? "القبطان"} onClose={() => setRoyale(false)} />}
 
        {shopOpen && <GameStore activeId={themeId} onSelect={selectTheme} onClose={() => setShopOpen(false)} />}
+      <FrameShopModal isOpen={frameShopOpen} onClose={() => setFrameShopOpen(false)} coins={(player as any)?.coins ?? 100000} gems={(player as any)?.diamonds ?? 150} />
 
       {questsOpen && (
         <div className="daily-overlay" role="dialog" aria-label="المهام اليومية">
