@@ -307,5 +307,18 @@ loopId=requestAnimationFrame(draw);
  function update(){const nextMode=mode.value,nextLevel=Number(level.value);if(nextMode!==lastMode){window.repairFromBroken=nextMode==='repair'&&lastMode==='destroyed';window.modeStartedAt=performance.now();lastMode=nextMode;}window.shipLevel=nextLevel;window.visualMode=nextMode;hint.textContent=messages[nextMode];if(nextLevel!==lastLevel){lastLevel=nextLevel;if(nextMode==='repair')window.repairFromBroken=false;window.modeStartedAt=performance.now();img.dataset.ship=String(nextLevel);img.src=shipSources[nextLevel];}}
  level.addEventListener('change',update);mode.addEventListener('change',update);document.getElementById('replayFx').addEventListener('click',()=>{window.modeStartedAt=performance.now();});update();
 })();
+  // أضفنا مستمع الرسائل postMessage داخل public/ship-effects/index.html لربط المحرك بالاستوديو مباشرة:
+window.addEventListener('message', function(ev) {
+  if (!ev.data) return;
+  if (ev.data.type === 'SET_SHIP_IMAGE' && ev.data.dataUrl) {
+    img.src = ev.data.dataUrl;
+    window.modeStartedAt = performance.now();
+  }
+  if (ev.data.type === 'SET_EFFECT_MODE' && ev.data.mode) {
+    var m = document.getElementById('shipMode');
+    if (m) { m.value = ev.data.mode; m.dispatchEvent(new Event('change')); }
+  }
+});
+
 </script>
 </body></html>
