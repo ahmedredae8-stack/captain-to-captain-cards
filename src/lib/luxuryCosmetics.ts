@@ -103,3 +103,34 @@ export function bubbleStyle(index: number): CSSProperties {
   }
   return out as CSSProperties;
 }
+
+
+// توافقية مع باقي مكونات التطبيق (LuxuryPlayerProfile, FrameShopModal, TopHud)
+export const LUXURY_THEMES = THEMES;
+export type LuxuryTheme = Theme;
+export function getTheme(index: number): Theme {
+  return THEMES[clampTheme(index)];
+}
+
+const KEY_EQ = "cosmetic.frame.equipped";
+export function getEquippedFrame(): number {
+  try {
+    if (typeof localStorage === "undefined") return 0;
+    const v = localStorage.getItem(KEY_EQ);
+    return v ? clampTheme(JSON.parse(v)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function setEquippedFrame(index: number): void {
+  const k = clampTheme(index);
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(KEY_EQ, JSON.stringify(k));
+    }
+  } catch {}
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("c2c:frame_changed", { detail: { index: k } }));
+  }
+}
