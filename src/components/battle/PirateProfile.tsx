@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import { Anchor, Fish, LogOut, MessageCircle, Shield, Swords, Users, X, Sparkles } from "lucide-react";
 import SeaScene, { type SeaShip } from "@/components/SeaScene";
 import { CaptainAvatar } from "@/components/GameSprite";
+import { CosmeticFrame } from "@/components/CosmeticFrame";
 import { THEMES, clampTheme } from "@/lib/luxuryCosmetics";
 import { fleetCatalog, type FleetShip } from "@/lib/fleetCatalog";
 import { getSeaWorld, SEA_WORLDS } from "@/lib/seaWorld";
@@ -320,30 +321,32 @@ export function PirateProfile({
         <WeaponsLayer ref={weaponsRef} />
       </div>
 
-      {/* TOP HEADER: DAILY REWARD LUXURY STYLE (ONLY AVATAR, NAME & ACTIONS - NO SQUEEZED CURRENCY) */}
+      {/* TOP HEADER: DAILY REWARD LUXURY STYLE (ONLY AVATAR, NAME & ACTIONS - NO SQUEEZED CURRENCY) */}      {/* TOP HEADER: LUXURY DAILY REWARD & COSMETIC FRAME DESIGN (LARGE AVATAR & ELEGANT NAME - NO SQUEEZED CURRENCY) */}
       <header className="enemy-top-wrapper">
-        <div className="daily-panel enemy-header-panel">
-          <div className="daily-head enemy-head-content">
+        <div className="enemy-header-panel">
+          <div className="enemy-head-content">
             {/* Captain Avatar with Equipped Frame & Info */}
             <div className="enemy-captain-badge">
               <div className="enemy-avatar-wrap">
-                <CaptainAvatar
-                  seed={typeof player?.avatar_index === "number" ? player.avatar_index : 0}
-                  url={player?.avatar_url}
-                  size={58}
-                  frameIndex={frameIndex}
-                  isSelf={isMe}
-                />
+                <CosmeticFrame themeIndex={frameIndex} size={72}>
+                  <div className="w-full h-full bg-[#141b2d] flex items-center justify-center overflow-hidden rounded-full">
+                    <CaptainAvatar
+                      seed={typeof player?.avatar_index === "number" ? player.avatar_index : 0}
+                      url={player?.avatar_url}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                </CosmeticFrame>
               </div>
 
               <div className="enemy-player-meta">
-                <span className="daily-kicker">محيط الخصم • {world.name || "بحر القراصنة"}</span>
-                <h1 className="daily-title enemy-c-name">
-                  {safeName}
+                <span className="enemy-kicker-tag">محيط الخصم • {world.name || "بحر القراصنة"}</span>
+                <div className="enemy-c-name-row">
+                  <h1 className="enemy-c-name">{safeName}</h1>
                   {player?.score !== undefined && (
                     <span className="enemy-c-rank">[{player.score.toLocaleString("ar")} مجد]</span>
                   )}
-                </h1>
+                </div>
               </div>
             </div>
 
@@ -358,25 +361,23 @@ export function PirateProfile({
                     if (onMessage) onMessage();
                     else if (onOpenChat) onOpenChat(player.id);
                   }}
-                  title="مراسلة القرصان"
                 >
-                  <MessageCircle size={16} />
-                  <span>مراسلة</span>
+                  <MessageCircle size={17} />
+                  <span>محادثة</span>
                 </button>
               )}
 
-              {onAttack && !isMe && (
+              {onChallenge && (
                 <button
                   type="button"
                   className="tos-btn enemy-btn-attack"
                   onClick={() => {
-                    playCustomAudio("cannon");
-                    onAttack();
+                    playCustomAudio("click");
+                    onChallenge();
                   }}
-                  title="بدء المعركة الشاملة"
                 >
-                  <Swords size={16} />
-                  <span>قتال</span>
+                  <Swords size={17} />
+                  <span>قتال الأسطول</span>
                 </button>
               )}
 
@@ -387,10 +388,9 @@ export function PirateProfile({
                   playCustomAudio("click");
                   onClose();
                 }}
-                title="الخروج من المحيط"
               >
-                <LogOut size={16} />
-                <span>الخروج</span>
+                <LogOut size={17} />
+                <span>انسحاب</span>
               </button>
             </div>
           </div>
@@ -908,7 +908,7 @@ export function PirateProfile({
         /* SHIP HUD */
         .enemy-ship-hud {
           position: absolute;
-          bottom: -2.1rem;
+          top: -2.3rem;
           display: flex;
           flex-direction: column;
           align-items: center;
@@ -967,12 +967,12 @@ export function PirateProfile({
           display: grid;
           grid-template-columns: repeat(3, 1fr);
           gap: 0.75rem;
-          padding: 0.75rem 1rem !important;
-          background: linear-gradient(180deg, rgba(28, 18, 12, 0.96) 0%, rgba(12, 8, 5, 0.98) 100%) !important;
-          border: 1.5px solid rgba(245, 197, 66, 0.6) !important;
-          border-radius: 20px !important;
-          box-shadow: 0 12px 34px rgba(0, 0, 0, 0.8), 0 0 24px rgba(245, 197, 66, 0.22) !important;
-          backdrop-filter: blur(14px);
+          padding: 0.85rem 1.15rem !important;
+          background: linear-gradient(180deg, rgba(13, 21, 42, 0.94) 0%, rgba(6, 11, 24, 0.98) 100%) !important;
+          border: 2px solid rgba(245, 197, 66, 0.75) !important;
+          border-radius: 24px !important;
+          box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85), 0 0 30px rgba(245, 197, 66, 0.3), inset 0 1px 0 rgba(255,255,255,0.15) !important;
+          backdrop-filter: blur(16px);
         }
         .enemy-act-btn {
           background: rgba(255, 255, 255, 0.04);
@@ -1051,11 +1051,12 @@ export function PirateProfile({
           width: min(100%, 40rem) !important;
           max-height: 85vh;
           overflow-y: auto;
-          background: linear-gradient(180deg, rgba(28, 18, 12, 0.98) 0%, rgba(14, 9, 6, 0.99) 100%) !important;
-          border: 1.5px solid rgba(245, 197, 66, 0.7) !important;
-          border-radius: 22px !important;
-          padding: 1.25rem !important;
-          box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85), 0 0 32px rgba(245, 197, 66, 0.25) !important;
+          background: linear-gradient(180deg, rgba(13, 21, 42, 0.96) 0%, rgba(7, 11, 24, 0.99) 100%) !important;
+          border: 2px solid rgba(245, 197, 66, 0.75) !important;
+          border-radius: 26px !important;
+          padding: 1.35rem !important;
+          box-shadow: 0 20px 50px rgba(0, 0, 0, 0.9), 0 0 36px rgba(245, 197, 66, 0.35), inset 0 1px 0 rgba(255,255,255,0.15) !important;
+          backdrop-filter: blur(18px);
         }
         .enemy-modal-head {
           display: flex;
