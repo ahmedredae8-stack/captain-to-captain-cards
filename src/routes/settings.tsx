@@ -55,7 +55,7 @@ export function SettingsPage({ onOpenStudio }: { onOpenStudio?: () => void }) {
     <div className="cfg" dir="rtl">
       <section className="cfg-account">
         <button type="button" className="cfg-face" onClick={() => player && setFaces((v) => !v)} aria-label="تغيير الصورة">
-          <CaptainAvatar seed={player?.avatar_index ?? nameSeed(player?.name ?? "قبطان")} url={player?.avatar_url} />
+          <CaptainAvatar seed={player?.avatar_index ?? nameSeed(player?.name ?? "قبطان")} url={player?.avatar_url} isSelf={true} size={76} />
           {player && <span><Camera className="h-3.5 w-3.5" /></span>}
         </button>
         <div>
