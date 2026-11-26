@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { getEquippedFrame, getTheme, LuxuryTheme } from "@/lib/luxuryCosmetics";
 import { CosmeticFrame } from "@/components/CosmeticFrame";
-import CaptainAvatar from "@/components/CaptainAvatar";
+import { CaptainAvatar } from "@/components/GameSprite";
 
 type Props = {
   name?: string;
