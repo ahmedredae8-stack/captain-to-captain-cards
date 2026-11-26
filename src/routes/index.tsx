@@ -256,7 +256,14 @@ function Index() {
       {royale && <KingOfSeas player={player} playerName={player?.name ?? "القبطان"} onClose={() => setRoyale(false)} />}
 
        {shopOpen && <GameStore activeId={themeId} onSelect={selectTheme} onClose={() => setShopOpen(false)} />}
-      <FrameShopModal isOpen={frameShopOpen} onClose={() => setFrameShopOpen(false)} coins={(player as any)?.coins ?? 100000} gems={(player as any)?.diamonds ?? 150} />
+      {frameShopOpen && (
+        <FrameShopModal
+          isOpen={frameShopOpen}
+          onClose={() => setFrameShopOpen(false)}
+          coins={(player as any)?.coins ?? 100000}
+          gems={(player as any)?.diamonds ?? 150}
+        />
+      )}
 
       {questsOpen && (
         <div className="daily-overlay" role="dialog" aria-label="المهام اليومية">
