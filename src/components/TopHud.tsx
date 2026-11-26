@@ -1,6 +1,6 @@
 // src/components/TopHud.tsx
 import React, { useEffect, useState, useMemo, type CSSProperties, type ReactNode } from "react";
-import { getEquippedFrame, getTheme, LuxuryTheme, THEMES, clampTheme } from "@/lib/luxuryCosmetics";
+import { THEMES, clampTheme, type LuxuryTheme } from "@/lib/luxuryCosmetics";
 import { useEquippedFrame } from "@/lib/equippedFrame";
 import { CosmeticFrame } from "@/components/CosmeticFrame";
 import { CaptainAvatar } from "@/components/GameSprite";
@@ -120,29 +120,28 @@ export function TopHud({
   hasNewGift,
 }: Props) {
   const equippedHookIndex = useEquippedFrame();
-  const [frameIndex, setFrameIndex] = useState<number>(() => propFrameIndex ?? getEquippedFrame() ?? equippedHookIndex);
+  const [frameIndex, setFrameIndex] = useState<number>(() => propFrameIndex ?? equippedHookIndex);
 
   useEffect(() => {
     if (typeof propFrameIndex === "number") {
       setFrameIndex(propFrameIndex);
     } else {
-      setFrameIndex(getEquippedFrame() ?? equippedHookIndex);
+      setFrameIndex(equippedHookIndex);
     }
   }, [propFrameIndex, equippedHookIndex]);
 
   useEffect(() => {
-    setFrameIndex(propFrameIndex ?? getEquippedFrame() ?? equippedHookIndex);
     const handler = (e: any) => {
-      if (typeof e.detail?.index === "number") {
+      if (typeof e?.detail?.index === "number") {
         setFrameIndex(e.detail.index);
       }
     };
     window.addEventListener("c2c:frame_changed", handler);
     return () => window.removeEventListener("c2c:frame_changed", handler);
-  }, [propFrameIndex, equippedHookIndex]);
+  }, []);
 
   const activeIndex = clampTheme(frameIndex);
-  const theme: LuxuryTheme = useMemo(() => getTheme(activeIndex) ?? THEMES[activeIndex], [activeIndex]);
+  const theme: LuxuryTheme = useMemo(() => THEMES[activeIndex] ?? THEMES[0], [activeIndex]);
 
   const resolvedGold = gold ?? coins;
   const resolvedRuby = ruby ?? rubies;
