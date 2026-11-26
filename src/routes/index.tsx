@@ -1,3 +1,4 @@
+import { supabase } from "@/integrations/supabase/client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Moon, Sun } from "lucide-react";
@@ -10,7 +11,6 @@ import { TribesPage } from "@/routes/tribes";
 import { GameWindow } from "@/components/GameWindow";
 import { TradingFloor } from "@/components/TradingFloor";
 import { TopHud } from "@/components/TopHud";
-import { FrameShopModal } from "@/components/FrameShopModal";
 import { DailyReward } from "@/components/DailyReward";
 import { PrivateMessageToast } from "@/components/PrivateMessageToast";
 import { QuestBoard } from "@/components/QuestBoard";
@@ -85,8 +85,7 @@ function Index() {
   const [intro, setIntro] = useState(true);
   const [themeId, setThemeId] = useState(defaultTheme.id);
   const [shopOpen, setShopOpen] = useState(false);
-  const [frameShopOpen, setFrameShopOpen] = useState(false);
-  const [royale, setRoyale] = useState(false);
+    const [royale, setRoyale] = useState(false);
   const [questsOpen, setQuestsOpen] = useState(false);
   const [win, setWin] = useState<Win>(null);
   const [profile, setProfile] = useState<import("@/lib/player").Player | null>(null);
@@ -233,7 +232,7 @@ function Index() {
           onAvatarClick={() => open("settings")}
           onGiftClick={() => setQuestsOpen(true)}
           onOpenRewards={() => setQuestsOpen(true)}
-          onOpenFrameShop={() => setFrameShopOpen(true)}
+          onOpenStore={() => { playSfx("click", 0.7); setShopOpen(true); }}
           onTopUp={() => { playSfx("click", 0.7); setShopOpen(true); }}
         />
       </div>
@@ -255,13 +254,33 @@ function Index() {
       <BottomDock onAction={handleDockAction} />
       {royale && <KingOfSeas player={player} playerName={player?.name ?? "القبطان"} onClose={() => setRoyale(false)} />}
 
-       {shopOpen && <GameStore activeId={themeId} onSelect={selectTheme} onClose={() => setShopOpen(false)} />}
-      {frameShopOpen && (
-        <FrameShopModal
-          isOpen={frameShopOpen}
-          onClose={() => setFrameShopOpen(false)}
-          coins={(player as any)?.coins ?? 100000}
-          gems={(player as any)?.diamonds ?? 150}
+      {shopOpen && (
+        <GameStore
+          activeId={themeId}
+          onSelect={selectTheme}
+          onClose={() => setShopOpen(false)}
+          gold={(player as any)?.coins ?? (player as any)?.gold ?? 100000}
+          gems={(player as any)?.diamonds ?? (player as any)?.diamond ?? (player as any)?.gems ?? 150}
+          avatarUrl={player?.avatar_url}
+          avatarIndex={player?.avatar_index ?? 0}
+          onSpend={(kind, amount) => {
+            if (!player) return false;
+            const currentGold = (player as any)?.coins ?? (player as any)?.gold ?? 0;
+            const currentGems = (player as any)?.diamonds ?? (player as any)?.diamond ?? (player as any)?.gems ?? 0;
+            if (kind === "gold") {
+              if (currentGold < amount) return false;
+              const nextGold = currentGold - amount;
+              setPlayer({ ...player, coins: nextGold, gold: nextGold } as any);
+              void supabase.from("players").update({ coins: nextGold } as any).eq("id", player.id);
+              return true;
+            } else {
+              if (currentGems < amount) return false;
+              const nextGems = currentGems - amount;
+              setPlayer({ ...player, diamonds: nextGems, diamond: nextGems, gems: nextGems } as any);
+              void supabase.from("players").update({ diamonds: nextGems } as any).eq("id", player.id);
+              return true;
+            }
+          }}
         />
       )}
 
