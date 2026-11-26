@@ -328,14 +328,13 @@ export function PirateProfile({
             {/* Captain Avatar with Equipped Frame & Info */}
             <div className="enemy-captain-badge">
               <div className="enemy-avatar-wrap">
-                <CosmeticFrame themeIndex={frameIndex} size={72}>
-                  <div className="w-full h-full bg-[#141b2d] flex items-center justify-center overflow-hidden rounded-full">
-                    <CaptainAvatar
-                      seed={typeof player?.avatar_index === "number" ? player.avatar_index : 0}
-                      url={player?.avatar_url}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
+                <CosmeticFrame themeIndex={frameIndex} size={78}>
+                  <img
+                    src={player?.avatar_url || CAPTAINS[Math.abs(typeof player?.avatar_index === "number" ? player.avatar_index : seed) % CAPTAINS.length]}
+                    alt=""
+                    draggable={false}
+                    className="w-full h-full object-cover rounded-full"
+                  />
                 </CosmeticFrame>
               </div>
 
@@ -680,10 +679,10 @@ export function PirateProfile({
         .enemy-header-panel {
           width: min(100%, 46rem) !important;
           padding: 0.65rem 1.25rem !important;
-          background: linear-gradient(180deg, rgba(30, 20, 12, 0.94) 0%, rgba(14, 10, 7, 0.96) 100%) !important;
-          border: 1.5px solid rgba(245, 197, 66, 0.55) !important;
-          border-radius: 18px !important;
-          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 24px rgba(245, 197, 66, 0.18) !important;
+          background: linear-gradient(180deg, rgba(14, 22, 45, 0.94) 0%, rgba(7, 11, 24, 0.98) 100%) !important;
+          border: 2px solid rgba(242, 185, 52, 0.75) !important;
+          border-radius: 22px !important;
+          box-shadow: 0 12px 35px rgba(0, 0, 0, 0.8), 0 0 24px rgba(242, 185, 52, 0.35) !important;
           backdrop-filter: blur(14px);
         }
         .enemy-head-content {
