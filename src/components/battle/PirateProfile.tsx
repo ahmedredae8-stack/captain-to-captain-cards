@@ -1,8 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from "react";
-import { Anchor, Fish, LogOut, MessageCircle, Shield, Swords, Users, X, Sparkles, Coins, Gem, Trophy } from "lucide-react";
+import { Anchor, Fish, LogOut, MessageCircle, Shield, Swords, Users, X, Sparkles } from "lucide-react";
 import SeaScene, { type SeaShip } from "@/components/SeaScene";
 import { CaptainAvatar } from "@/components/GameSprite";
-import { CosmeticFrame } from "@/components/CosmeticFrame";
 import { THEMES, clampTheme } from "@/lib/luxuryCosmetics";
 import { fleetCatalog, type FleetShip } from "@/lib/fleetCatalog";
 import { getSeaWorld, SEA_WORLDS } from "@/lib/seaWorld";
@@ -10,7 +9,7 @@ import { CREWS } from "@/lib/items";
 import { WEAPONS } from "@/game/duel";
 import { FISH, saveHaul, type FishId } from "@/lib/catches";
 import { playSfx } from "@/lib/sound";
-import { useLiveShips } from "@/lib/shipOverrides";
+import { useEquippedFrame } from "@/lib/equippedFrame";
 import type { Player } from "@/lib/player";
 import WeaponsLayer, { type WeaponsApi, type WeaponId } from "@/fx/weapons/WeaponsLayer";
 import { CAPTAINS } from "@/lib/art";
@@ -41,7 +40,8 @@ const CARD_ART_MAP: Record<string, string> = {
 
 const hash = (value: string) => {
   let h = 2166136261;
-  for (const c of value) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  const str = String(value || "pirate");
+  for (const c of str) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
   return h >>> 0;
 };
 
@@ -69,10 +69,14 @@ function playCustomAudio(type: "cannon" | "sail" | "shield" | "creak" | "click")
   }
 }
 
-interface PirateProfileProps {
+export interface PirateProfileProps {
   player: Player;
+  isMe?: boolean;
+  live?: boolean;
   onClose: () => void;
+  onMessage?: () => void;
   onOpenChat?: (playerId: string) => void;
+  onAttack?: () => void;
 }
 
 interface OceanEnemyShip {
@@ -87,25 +91,34 @@ interface OceanEnemyShip {
   sunk: boolean;
 }
 
-export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProps) {
-  const seed = useMemo(() => hash(player.id || player.name), [player.id, player.name]);
-  const liveShips = useLiveShips();
+export function PirateProfile({
+  player,
+  isMe = false,
+  live = false,
+  onClose,
+  onMessage,
+  onOpenChat,
+  onAttack,
+}: PirateProfileProps) {
+  const safeName = player?.name || "قرصان مجهول";
+  const safeId = String(player?.id || safeName);
+  const seed = useMemo(() => hash(safeId), [safeId]);
   const weaponsRef = useRef<WeaponsApi | null>(null);
 
-  // Frame Index for Captain Avatar (uses player's avatar_index or seed)
+  // Equipped frame for current viewer or opponent
+  const myEquipped = useEquippedFrame();
   const frameIndex = useMemo(() => {
-    const raw = typeof player.avatar_index === "number" ? player.avatar_index : seed % 21;
+    if (isMe) return myEquipped;
+    const raw = typeof player?.avatar_index === "number" ? player.avatar_index : seed % 21;
     return clampTheme(raw);
-  }, [player.avatar_index, seed]);
-
-  const frameTheme = THEMES[frameIndex] ?? THEMES[0];
+  }, [isMe, myEquipped, player?.avatar_index, seed]);
 
   // Sea turbulence state (amplifies when attacking or entering)
   const [stormLevel, setStormLevel] = useState<number>(1.8);
   const [isAttacking, setIsAttacking] = useState<boolean>(false);
 
   // Sea world theme
-  const worldId = player.sea_world || SEA_WORLDS[seed % SEA_WORLDS.length].id;
+  const worldId = (player as any)?.sea_world || (player as any)?.seaWorld || (SEA_WORLDS[seed % SEA_WORLDS.length]?.id ?? "caribbean");
   const world = useMemo(() => getSeaWorld(worldId), [worldId]);
 
   // Sound upon entering opponent's ocean
@@ -126,7 +139,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
     };
   }, [world.id]);
 
-  // Enemy fleet derivation
+  // Enemy fleet derivation (placed inside safe berths in water)
   const enemyFleet = useMemo<OceanEnemyShip[]>(() => {
     const pool = fleetCatalog;
     const count = 3 + (seed % 3); // 3 to 5 ships
@@ -134,10 +147,10 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
     const list: OceanEnemyShip[] = [];
 
     for (let i = 0; i < count; i++) {
-      const ship = pool[(seed + i * 3) % pool.length];
+      const ship = pool[(seed + i * 3) % pool.length] ?? pool[0]!;
       const maxHp = 100 + ((seed + i * 17) % 80);
       const lane = lanes[i % lanes.length] || { dockX: 30 + i * 18, dockY: 50 + (i % 2) * 12 };
-      const fishId = fishKeys[(seed + i * 5) % fishKeys.length];
+      const fishId = fishKeys[(seed + i * 5) % fishKeys.length] ?? "sardine";
       const fishCount = 6 + ((seed + i * 7) % 24);
       const rot = ((seed + i * 11) % 15) - 7;
 
@@ -172,11 +185,14 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
   // Player's own usable fleet for plundering
   const myShips = useMemo(() => {
     return fleetCatalog.map((ship, idx) => {
-      const ov = liveShips[ship.id];
-      const isOwned = idx === 0 || (ov && (ov.hull > 0 || ov.weapons.length > 0));
-      return { ship, isOwned, data: ov || { hull: 100, weapons: [ship.data?.weapons?.[0] || "cannon"] } };
+      const isOwned = idx === 0 || idx < 4;
+      return {
+        ship,
+        isOwned,
+        data: { hull: 100, weapons: ship.data?.weapons ?? ["cannon"] },
+      };
     }).filter((s) => s.isOwned);
-  }, [liveShips]);
+  }, []);
 
   // Weapons with card arts
   const availableWeapons = useMemo(() => {
@@ -189,7 +205,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
     });
   }, [myShips]);
 
-  // Ships passed to SeaScene for background water interaction
+  // Feed ships directly into the WebGL Sea Engine so they float inside water waves
   const seaShips = useMemo<SeaShip[]>(() => {
     return fleet.map((s) => ({
       id: `enemy-ship-${s.id}`,
@@ -202,26 +218,25 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
     }));
   }, [fleet]);
 
-  // Attack with live weapon projectile layer
+  // Attack with live weapon projectile layer - exact lock-on to the ship's water location
   const attack = async (weaponId: string) => {
     if (!target) return;
     const weapon = availableWeapons.find((w) => w.id === weaponId);
     if (!weapon || !weaponsRef.current) return;
     const id = target.id;
     const layer = document.querySelector<HTMLElement>(".enemy-weapons-host");
-    const targetEl = document.querySelector<HTMLElement>(`[data-enemy-ship="${id}"]`);
     const layerRect = layer?.getBoundingClientRect();
-    const targetRect = targetEl?.getBoundingClientRect();
-    if (!layerRect || !targetRect) return;
+    if (!layerRect) return;
 
     setModal(null);
     playCustomAudio("cannon");
     setStormLevel(3.2);
     setIsAttacking(true);
-    setNotice(`💣 إطلاق «${weapon.name}» نحو سفينة «${target.ship.name}»!`);
+    setNotice(`💣 إطلاق «${weapon.name}» بدقة نحو سفينة «${target.ship.name}»!`);
 
-    const toX = targetRect.left + targetRect.width / 2 - layerRect.left;
-    const toY = targetRect.top + targetRect.height / 2 - layerRect.top;
+    // Lock-on coordinates inside the layer: directly onto the ship's center in the water
+    const toX = (target.leftPct / 100) * layerRect.width;
+    const toY = (target.topPct / 100) * layerRect.height;
     const fromX = layerRect.width * 0.5;
     const fromY = layerRect.height - 40;
 
@@ -282,16 +297,16 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
   };
 
   return (
-    <div className={`enemy-ocean ${isAttacking ? "is-storming" : ""}`} dir="rtl">
-      {/* Dynamic Animated Sea Canvas */}
+    <div className={`enemy-ocean ${isAttacking ? "is-storming" : ""}`}>
+      {/* Dynamic Animated Sea Canvas with WebGL ship rendering & sea studio water effects */}
       <SeaScene
         theme={world}
         ships={seaShips}
         params={{
-          amp: 0.1 * stormLevel,
-          spd: 1.4 * stormLevel,
-          foam: 0.15 * stormLevel,
-          rip: 1.2,
+          amp: 0.12 * stormLevel,
+          spd: 1.3 * stormLevel,
+          foam: 0.16 * stormLevel,
+          rip: 1.3,
         }}
         className="enemy-ocean-canvas"
         style={{ width: "100%", height: "100%" }}
@@ -300,61 +315,48 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
       {/* Atmospheric Vignette & Storm Flash */}
       <div className="enemy-ocean-shade" />
 
-      {/* Weapons Layer for true battle projectile animations */}
+      {/* Weapons Layer for battle projectile animations */}
       <div className="enemy-weapons-host">
         <WeaponsLayer ref={weaponsRef} />
       </div>
 
-      {/* TOP HEADER: DAILY REWARD LUXURY STYLE WITH COSMETIC FRAME & COINS */}
+      {/* TOP HEADER: DAILY REWARD LUXURY STYLE (ONLY AVATAR, NAME & ACTIONS - NO SQUEEZED CURRENCY) */}
       <header className="enemy-top-wrapper">
         <div className="daily-panel enemy-header-panel">
           <div className="daily-head enemy-head-content">
             {/* Captain Avatar with Equipped Frame & Info */}
             <div className="enemy-captain-badge">
               <div className="enemy-avatar-wrap">
-                <CosmeticFrame themeIndex={frameIndex} size={62} title={frameTheme.n}>
-                  <div className="w-full h-full bg-[#141b2d] flex items-center justify-center">
-                    <CaptainAvatar seed={player.name} url={player.avatar_url} className="w-full h-full object-cover" />
-                  </div>
-                </CosmeticFrame>
+                <CaptainAvatar
+                  seed={typeof player?.avatar_index === "number" ? player.avatar_index : 0}
+                  url={player?.avatar_url}
+                  size={58}
+                  frameIndex={frameIndex}
+                  isSelf={isMe}
+                />
               </div>
 
               <div className="enemy-player-meta">
                 <span className="daily-kicker">محيط الخصم • {world.name || "بحر القراصنة"}</span>
                 <h1 className="daily-title enemy-c-name">
-                  {player.name}
-                  {player.score !== undefined && (
+                  {safeName}
+                  {player?.score !== undefined && (
                     <span className="enemy-c-rank">[{player.score.toLocaleString("ar")} مجد]</span>
                   )}
                 </h1>
               </div>
             </div>
 
-            {/* Currency Badges (Coins, Gems, Glory) in Golden Frame style */}
-            <div className="enemy-hud-pills">
-              {player.coins !== undefined && (
-                <div className="enemy-pill coin" title="عملات الذهب">
-                  <Coins size={14} className="text-amber-400" />
-                  <span>{player.coins.toLocaleString("ar")}</span>
-                </div>
-              )}
-              {player.gems !== undefined && (
-                <div className="enemy-pill gem" title="الجواهر النادرة">
-                  <Gem size={14} className="text-emerald-400" />
-                  <span>{player.gems.toLocaleString("ar")}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Actions: Private Message & Exit */}
+            {/* Actions: Message, Fight, Exit */}
             <div className="enemy-header-actions">
-              {onOpenChat && (
+              {(onOpenChat || onMessage) && (
                 <button
                   type="button"
                   className="tos-btn enemy-btn-msg"
                   onClick={() => {
                     playCustomAudio("click");
-                    onOpenChat(player.id);
+                    if (onMessage) onMessage();
+                    else if (onOpenChat) onOpenChat(player.id);
                   }}
                   title="مراسلة القرصان"
                 >
@@ -362,6 +364,22 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
                   <span>مراسلة</span>
                 </button>
               )}
+
+              {onAttack && !isMe && (
+                <button
+                  type="button"
+                  className="tos-btn enemy-btn-attack"
+                  onClick={() => {
+                    playCustomAudio("cannon");
+                    onAttack();
+                  }}
+                  title="بدء المعركة الشاملة"
+                >
+                  <Swords size={16} />
+                  <span>قتال</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 className="tos-btn enemy-btn-exit"
@@ -387,7 +405,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
         </div>
       )}
 
-      {/* HIT DAMAGE POPUP OVER SHIPS */}
+      {/* HIT DAMAGE POPUP OVER TARGET SHIP */}
       {hitFx && (
         <div
           className="enemy-hit-fx"
@@ -400,7 +418,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
         </div>
       )}
 
-      {/* SHIPS FLOATING DIRECTLY IN THE WATER (NO BLACK BOXES) */}
+      {/* INTERACTIVE OVERLAY OVER WATER BERTHS: HITBOX & HUD WITHOUT CIRCLE RETICLE */}
       <div className="enemy-ships-layer">
         {fleet.map((s) => {
           const isSelected = selectedShipId === s.id;
@@ -415,35 +433,31 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
               style={{
                 top: `${s.topPct}%`,
                 left: `${s.leftPct}%`,
-                transform: `translate(-50%, -50%) rotate(${s.rotationDeg}deg)`,
               }}
               onClick={() => {
                 playCustomAudio("click");
                 setSelectedShipId(s.id);
               }}
             >
-              {/* Natural Water Wake / Foam beneath the ship */}
-              {!s.sunk && <div className="water-wake" />}
-
-              {/* Pure Transparent Ship Hull with gentle water bobbing */}
-              <div className="ship-bobbing-body">
+              {/* Fallback Hull (kept subtle; WebGL draws main hull into waves) */}
+              <div className="ship-fallback-hull">
                 <img
                   src={s.ship.hull}
                   alt={s.ship.name}
-                  className="enemy-ship-hull"
+                  className="enemy-ship-img"
                   draggable={false}
                 />
               </div>
 
-              {/* Golden Rotating Target Reticle */}
-              {isSelected && !s.sunk && <div className="enemy-ship-reticle" />}
+              {/* Natural Water Wake Ripples */}
+              {!s.sunk && <div className="water-wake" />}
 
               {/* Sunk Marker */}
               {s.sunk && <div className="enemy-sunk-marker">غارقة ☠️</div>}
 
-              {/* Floating Health & Fish Bar */}
+              {/* Floating Health & Fish HUD Bar */}
               {!s.sunk && (
-                <div className="enemy-ship-hud" style={{ transform: `rotate(${-s.rotationDeg}deg)` }}>
+                <div className="enemy-ship-hud">
                   <span className="enemy-ship-name-tag">{s.ship.name}</span>
                   <div className="enemy-hp-track">
                     <div
@@ -575,11 +589,11 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
                   >
                     <div className="enemy-card-art-box plunder-ship-art">
                       <img src={ship.hull} alt={ship.name} className="enemy-ship-thumb" />
-                      <span className="enemy-card-badge text-amber-300">⚡ سرعة {ship.data?.fishing?.trip_minutes ?? 10}م</span>
+                      <span className="enemy-card-badge text-amber-300">⚡ سرعة {ship.data?.class ?? 1}</span>
                     </div>
                     <div className="enemy-card-info">
                       <strong className="enemy-card-title">{ship.name}</strong>
-                      <small className="enemy-card-sub">الفئة {ship.data?.class_ar ?? "صيد"}</small>
+                      <small className="enemy-card-sub">رتبة {ship.data?.tier ?? 1}</small>
                     </div>
                     <span className="tos-btn enemy-card-fire-btn">إرسال للنهب</span>
                   </button>
@@ -587,7 +601,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
               </div>
             )}
 
-            {/* SUPPORT CREW: REAL CAPTAIN / CREW PORTRAITS AS IN CAPTAINS WINDOW */}
+            {/* SUPPORT CREW: REAL CAPTAIN / CREW PORTRAITS */}
             {modal === "support" && (
               <div className="enemy-cards-grid">
                 {CREWS.map((crew, idx) => {
@@ -617,7 +631,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
         </div>
       )}
 
-      {/* Integrated Self-Contained CSS Styles */}
+      {/* Integrated CSS Styles */}
       <style>{`
         .enemy-ocean {
           position: fixed;
@@ -654,6 +668,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           50% { filter: brightness(1.2) contrast(1.1); }
           100% { filter: brightness(0.95); }
         }
+
         /* TOP BANNER / HUD IN DAILY REWARD DESIGN */
         .enemy-top-wrapper {
           position: relative;
@@ -663,11 +678,11 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           justify-content: center;
         }
         .enemy-header-panel {
-          width: min(100%, 54rem) !important;
-          padding: 0.75rem 1.25rem !important;
+          width: min(100%, 46rem) !important;
+          padding: 0.65rem 1.25rem !important;
           background: linear-gradient(180deg, rgba(30, 20, 12, 0.94) 0%, rgba(14, 10, 7, 0.96) 100%) !important;
           border: 1.5px solid rgba(245, 197, 66, 0.55) !important;
-          border-radius: 20px !important;
+          border-radius: 18px !important;
           box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7), 0 0 24px rgba(245, 197, 66, 0.18) !important;
           backdrop-filter: blur(14px);
         }
@@ -676,7 +691,6 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           align-items: center;
           justify-content: space-between;
           gap: 1rem;
-          flex-wrap: wrap;
         }
         .enemy-captain-badge {
           display: flex;
@@ -688,6 +702,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           display: flex;
           align-items: center;
           justify-content: center;
+          flex-shrink: 0;
         }
         .enemy-player-meta {
           display: flex;
@@ -707,36 +722,10 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           color: #f5c542;
           font-weight: normal;
         }
-        .enemy-hud-pills {
-          display: flex;
-          align-items: center;
-          gap: 0.6rem;
-        }
-        .enemy-pill {
-          display: flex;
-          align-items: center;
-          gap: 0.35rem;
-          padding: 0.3rem 0.75rem;
-          border-radius: 9999px;
-          font-size: 0.82rem;
-          font-weight: 800;
-          background: rgba(0, 0, 0, 0.45);
-          border: 1px solid rgba(245, 197, 66, 0.35);
-          color: #fffae8;
-          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
-        }
-        .enemy-pill.coin {
-          border-color: rgba(245, 158, 11, 0.5);
-          background: linear-gradient(180deg, rgba(42, 28, 10, 0.6) 0%, rgba(20, 14, 5, 0.7) 100%);
-        }
-        .enemy-pill.gem {
-          border-color: rgba(16, 185, 129, 0.5);
-          background: linear-gradient(180deg, rgba(8, 38, 26, 0.6) 0%, rgba(4, 18, 12, 0.7) 100%);
-        }
         .enemy-header-actions {
           display: flex;
           align-items: center;
-          gap: 0.6rem;
+          gap: 0.55rem;
         }
         .enemy-btn-msg {
           background: linear-gradient(180deg, #2a5a8c 0%, #17385c 100%) !important;
@@ -752,6 +741,23 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           transition: transform 0.15s ease, filter 0.15s ease;
         }
         .enemy-btn-msg:hover {
+          filter: brightness(1.15);
+          transform: translateY(-1px);
+        }
+        .enemy-btn-attack {
+          background: linear-gradient(180deg, #b91c1c 0%, #7f1d1d 100%) !important;
+          border: 1px solid rgba(252, 165, 165, 0.45) !important;
+          color: #fee2e2 !important;
+          padding: 0.5rem 0.9rem !important;
+          font-size: 0.82rem !important;
+          border-radius: 10px !important;
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
+          cursor: pointer;
+          transition: transform 0.15s ease, filter 0.15s ease;
+        }
+        .enemy-btn-attack:hover {
           filter: brightness(1.15);
           transform: translateY(-1px);
         }
@@ -772,6 +778,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           filter: brightness(1.15);
           transform: translateY(-1px);
         }
+
         /* NOTICE BANNER */
         .enemy-notice-banner {
           position: absolute;
@@ -796,6 +803,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           from { opacity: 0; transform: translate(-50%, -10px); }
           to { opacity: 1; transform: translate(-50%, 0); }
         }
+
         /* WEAPON PROJECTILE LAYER */
         .enemy-weapons-host {
           position: absolute;
@@ -803,6 +811,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           z-index: 18;
           pointer-events: none;
         }
+
         /* HIT FX POPUP */
         .enemy-hit-fx {
           position: absolute;
@@ -821,99 +830,85 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           80% { opacity: 1; transform: translate(-50%, -140%) scale(1); }
           100% { opacity: 0; transform: translate(-50%, -170%) scale(0.9); }
         }
-        /* SHIPS LAYER */
+
+        /* SHIPS LAYER - INTERACTIVE OVERLAY */
         .enemy-ships-layer {
           position: absolute;
           inset: 0;
-          z-index: 5;
+          z-index: 6;
           pointer-events: none;
         }
-        /* INDIVIDUAL SHIP SPOT: NO SQUARES, NO BLACK BOXES */
+
+        /* INTERACTIVE SHIP HITBOX SPOT (NO CIRCLE RETICLE) */
         .enemy-ship-spot {
           position: absolute;
+          transform: translate(-50%, -50%);
+          width: 8rem;
+          height: 8rem;
           pointer-events: auto;
           cursor: pointer;
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          transition: filter 0.2s ease;
+          transition: transform 0.2s ease;
+        }
+        .enemy-ship-spot:hover {
+          transform: translate(-50%, -50%) scale(1.05);
         }
         .enemy-ship-spot.is-sunk {
-          filter: grayscale(0.85) brightness(0.4);
           pointer-events: none;
         }
-        /* NATURAL WATER WAKE BEHIND / UNDER SHIP */
+
+        /* FALLBACK HULL (kept subtle; WebGL draws main hull into waves) */
+        .ship-fallback-hull {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          pointer-events: none;
+          opacity: 0.12;
+        }
+        .enemy-ship-img {
+          width: 90%;
+          height: 90%;
+          object-fit: contain;
+        }
+
+        /* NATURAL WATER WAKE RIPPLES */
         .water-wake {
           position: absolute;
-          width: 9rem;
-          height: 3.4rem;
+          bottom: 12%;
+          width: 75%;
+          height: 25%;
           border-radius: 50%;
-          background: radial-gradient(ellipse at center, rgba(180, 235, 255, 0.4) 0%, rgba(90, 180, 240, 0.2) 45%, transparent 75%);
-          filter: blur(5px);
-          transform: translateY(1.4rem);
-          pointer-events: none;
+          background: radial-gradient(ellipse at center, rgba(255, 255, 255, 0.22) 0%, rgba(135, 206, 250, 0.12) 50%, transparent 70%);
           animation: wake-pulse 2.8s ease-in-out infinite alternate;
+          pointer-events: none;
         }
         @keyframes wake-pulse {
-          0% { transform: translateY(1.4rem) scale(0.88); opacity: 0.55; }
-          100% { transform: translateY(1.4rem) scale(1.14); opacity: 0.95; }
+          from { transform: scale(0.92); opacity: 0.45; }
+          to { transform: scale(1.08); opacity: 0.75; }
         }
-        /* SHIP BOBBING IN WATER */
-        .ship-bobbing-body {
-          animation: ocean-bob 3.2s ease-in-out infinite alternate;
-        }
-        @keyframes ocean-bob {
-          0% { transform: translateY(-4px) rotate(-1.5deg); }
-          50% { transform: translateY(0px) rotate(0deg); }
-          100% { transform: translateY(5px) rotate(1.8deg); }
-        }
-        /* CLEAN SHIP HULL */
-        .enemy-ship-hull {
-          width: 7.2rem;
-          height: 7.2rem;
-          object-fit: contain;
-          filter: drop-shadow(0 14px 18px rgba(0, 10, 24, 0.85));
-          transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-        }
-        .enemy-ship-spot:hover .enemy-ship-hull {
-          transform: scale(1.1);
-        }
-        .enemy-ship-spot.is-selected .enemy-ship-hull {
-          transform: scale(1.15);
-          filter: drop-shadow(0 0 16px rgba(245, 197, 66, 0.85)) drop-shadow(0 14px 18px rgba(0, 10, 24, 0.85));
-        }
-        /* GOLDEN TARGET RETICLE */
-        .enemy-ship-reticle {
-          position: absolute;
-          width: 8rem;
-          height: 8rem;
-          border: 2px dashed rgba(245, 197, 66, 0.85);
-          border-radius: 50%;
-          pointer-events: none;
-          animation: spin-reticle 9s linear infinite;
-        }
-        @keyframes spin-reticle {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
+
+        /* SUNK MARKER */
         .enemy-sunk-marker {
           position: absolute;
-          top: -12px;
-          background: rgba(180, 20, 20, 0.9);
-          border: 1px solid #ff7b7b;
+          padding: 0.2rem 0.6rem;
+          border-radius: 9999px;
+          background: rgba(180, 20, 20, 0.85);
           color: #fff;
           font-size: 0.75rem;
           font-weight: 800;
-          padding: 2px 8px;
-          border-radius: 9999px;
-          white-space: nowrap;
+          border: 1px solid #f87171;
           box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
         }
+
         /* SHIP HUD */
         .enemy-ship-hud {
           position: absolute;
-          bottom: -2.3rem;
+          bottom: -2.1rem;
           display: flex;
           flex-direction: column;
           align-items: center;
@@ -921,18 +916,18 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           pointer-events: none;
         }
         .enemy-ship-name-tag {
-          font-size: 0.73rem;
+          font-size: 0.74rem;
           font-weight: bold;
           color: #fffae8;
           text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
           white-space: nowrap;
         }
         .enemy-hp-track {
-          width: 4.8rem;
+          width: 5rem;
           height: 5px;
-          background: rgba(0, 0, 0, 0.7);
+          background: rgba(0, 0, 0, 0.75);
           border-radius: 9999px;
-          border: 1px solid rgba(255, 255, 255, 0.2);
+          border: 1px solid rgba(255, 255, 255, 0.25);
           overflow: hidden;
         }
         .enemy-hp-fill {
@@ -952,12 +947,13 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           gap: 3px;
           font-size: 0.65rem;
           color: #93c5fd;
-          background: rgba(10, 22, 36, 0.85);
+          background: rgba(10, 22, 36, 0.88);
           padding: 1px 6px;
           border-radius: 9999px;
           border: 1px solid rgba(147, 197, 253, 0.35);
           white-space: nowrap;
         }
+
         /* 3 ROYAL FLOATING ACTION BUTTONS DOCK */
         .enemy-action-dock {
           position: absolute;
@@ -1033,6 +1029,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           font-size: 0.65rem;
           color: #d1b584;
         }
+
         /* MODAL WINDOW IN DAILY REWARD DESIGN */
         .enemy-modal-backdrop {
           position: fixed;
@@ -1051,7 +1048,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           to { opacity: 1; }
         }
         .enemy-modal-card {
-          width: min(100%, 42rem) !important;
+          width: min(100%, 40rem) !important;
           max-height: 85vh;
           overflow-y: auto;
           background: linear-gradient(180deg, rgba(28, 18, 12, 0.98) 0%, rgba(14, 9, 6, 0.99) 100%) !important;
@@ -1068,6 +1065,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           padding-bottom: 0.75rem;
           margin-bottom: 1rem;
         }
+
         /* CARDS GRID (WEAPONS / SHIPS / CREW) */
         .enemy-cards-grid {
           display: grid;
@@ -1117,8 +1115,8 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
           transform: scale(1.08);
         }
         .enemy-ship-thumb {
-          width: 80%;
-          height: 80%;
+          width: 75%;
+          height: 75%;
           object-fit: contain;
           filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.7));
         }
@@ -1168,14 +1166,15 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
         .enemy-card-fire-btn:hover {
           filter: brightness(1.15);
         }
+
         @media (max-width: 640px) {
           .enemy-header-panel {
-            padding: 0.6rem 0.8rem !important;
+            padding: 0.5rem 0.75rem !important;
           }
           .enemy-c-name {
             font-size: 0.98rem !important;
           }
-          .enemy-btn-msg, .enemy-btn-exit {
+          .enemy-btn-msg, .enemy-btn-attack, .enemy-btn-exit {
             padding: 0.42rem 0.6rem !important;
             font-size: 0.72rem !important;
           }
@@ -1184,7 +1183,7 @@ export function PirateProfile({ player, onClose, onOpenChat }: PirateProfileProp
             height: 2.7rem;
           }
           .enemy-act-btn b {
-            font-size: 0.68rem;
+            font-size: 0.64rem;
           }
           .enemy-cards-grid {
             grid-template-columns: repeat(2, 1fr);
