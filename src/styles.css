@@ -2857,7 +2857,8 @@
 .cfg-account small { font-size: .65rem; font-weight: 800; letter-spacing: .1em; color: var(--tos-aqua); }
 .cfg-account h2 { font-family: var(--tos-display); font-size: 1.3rem; color: var(--tos-gold); }
 .cfg-account p { display: flex; align-items: center; gap: .3rem; font-size: .7rem; color: var(--tos-subtle); }
-.cfg-face { position: relative; width: 4rem; height: 4rem; flex: none; border-radius: 1rem; overflow: hidden; border: 2px solid var(--tos-gold); }
+.cfg-face { position: relative; width: auto; height: auto; flex: none; border-radius: 50%; overflow: visible; border: none; background: transparent; padding: 0; }
+.cfg-face > * { width: auto; height: auto; }
 .cfg-face > * { width: 100%; height: 100%; }
 .cfg-face span { position: absolute; bottom: 0; inset-inline: 0; height: auto; display: grid; place-items: center; padding: .1rem; background: color-mix(in oklab, var(--tos-abyss) 70%, transparent); }
 .cfg-faces { padding: .5rem; border-radius: 1rem; background: var(--tos-card); }

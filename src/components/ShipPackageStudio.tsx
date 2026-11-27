@@ -178,6 +178,15 @@ export function ShipPackageStudio() {
     return liveShips.filter((s) => s.data.tier === selectedTier);
   }, [liveShips, selectedTier]);
 
+  // المستويات المتوفرة ديناميكياً
+  const availableTiers = useMemo(() => {
+    const set = new Set<number>();
+    liveShips.forEach((s) => {
+      if (typeof s.data.tier === "number") set.add(s.data.tier);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [liveShips]);
+
   // السفينة المحددة حالياً
   const currentShip = useMemo(() => {
     return liveShips.find((s) => s.id === selectedShipId) || liveShips[0];

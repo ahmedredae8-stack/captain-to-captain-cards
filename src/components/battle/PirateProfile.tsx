@@ -110,16 +110,18 @@ export function PirateProfile({
   const myEquipped = useEquippedFrame();
   const frameIndex = useMemo(() => {
     if (isMe) return myEquipped;
-    const raw = typeof player?.avatar_index === "number" ? player.avatar_index : seed % 21;
-    return clampTheme(raw);
-  }, [isMe, myEquipped, player?.avatar_index, seed]);
+    const rawIndex = player?.avatar_index ?? 0;
+    // Decode stored frame if encoded as (frame * 1000 + avatar), or fallback to direct theme/seed
+    const remoteFrame = rawIndex >= 1000 ? Math.floor(rawIndex / 1000) : ((player as any)?.frame_id ?? (seed % 21));
+    return clampTheme(remoteFrame);
+  }, [isMe, myEquipped, player, seed]);
 
   // Sea turbulence state (amplifies when attacking or entering)
   const [stormLevel, setStormLevel] = useState<number>(1.8);
   const [isAttacking, setIsAttacking] = useState<boolean>(false);
 
   // Sea world theme
-  const worldId = (player as any)?.sea_world || (player as any)?.seaWorld || (SEA_WORLDS[seed % SEA_WORLDS.length]?.id ?? "caribbean");
+  const worldId = (player as any)?.theme_id || (player as any)?.sea_world || (player as any)?.seaWorld || (SEA_WORLDS[seed % SEA_WORLDS.length]?.id ?? "caribbean");
   const world = useMemo(() => getSeaWorld(worldId), [worldId]);
 
   // Sound upon entering opponent's ocean
