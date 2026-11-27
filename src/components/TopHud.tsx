@@ -201,7 +201,7 @@ export function TopHud({
         >
           <div className="relative flex items-center justify-center">
             {/* إطار فاخر رئيسي بمقاس 78 بكسل ليكون واضحاً ومهيباً */}
-            <CosmeticFrame themeIndex={activeIndex} size={78}>
+            <CosmeticFrame themeIndex={activeIndex} size={94}>
               {avatarNode ?? (
                 <img
                   src={resolvedAvatarSrc}
@@ -214,9 +214,9 @@ export function TopHud({
 
             {normalizedPct !== null && (
               <svg
-                viewBox="0 0 92 92"
-                width={84}
-                height={84}
+                viewBox="0 0 108 108"
+                width={100}
+                height={100}
                 style={{
                   position: "absolute",
                   inset: -3,
@@ -225,17 +225,17 @@ export function TopHud({
                 }}
                 aria-hidden="true"
               >
-                <circle cx={46} cy={46} r={R} fill="none" stroke="rgba(0,0,0,.45)" strokeWidth={3} />
+                <circle cx={54} cy={54} r={48} fill="none" stroke="rgba(0,0,0,.45)" strokeWidth={3.5} />
                 <circle
-                  cx={46}
-                  cy={46}
-                  r={R}
+                  cx={54}
+                  cy={54}
+                  r={48}
                   fill="none"
                   stroke={theme.f[0]}
-                  strokeWidth={3}
+                  strokeWidth={3.5}
                   strokeLinecap="round"
-                  strokeDasharray={C}
-                  strokeDashoffset={C * (1 - normalizedPct / 100)}
+                  strokeDasharray={2 * Math.PI * 48}
+                  strokeDashoffset={2 * Math.PI * 48 * (1 - normalizedPct / 100)}
                 />
               </svg>
             )}
@@ -251,19 +251,19 @@ export function TopHud({
             </span>
           </div>
 
-          {/* شريط اسم القبطان متناسق وكبير بما يكفي */}
+          {/* فقاعة اسم القبطان الفخمة والبارزة جداً بتنسيق ملكي */}
           <div
-            className="inline-flex items-center justify-center gap-1.5 px-3 py-0.5 mt-0.5 text-[11px] font-black rounded-full shadow-lg border border-white/30 backdrop-blur-md transition-all duration-300"
+            className="inline-flex items-center justify-center gap-2 px-4 py-1 sm:px-5 sm:py-1.5 mt-1 text-xs sm:text-sm font-black rounded-full shadow-2xl border-2 border-amber-300/80 backdrop-blur-md transition-all duration-300"
             style={{
-              background: `linear-gradient(${theme.p[0]}, ${theme.p[1]})`,
-              color: theme.p[2] || "#000",
-              boxShadow: `0 4px 12px rgba(0,0,0,0.6), 0 0 12px ${theme.gl}`,
-              minWidth: "85px",
-              maxWidth: "135px",
+              background: `linear-gradient(135deg, ${theme.p[0]}, ${theme.p[1]})`,
+              color: theme.p[2] || "#fff",
+              boxShadow: `0 8px 24px rgba(0,0,0,0.85), 0 0 18px ${theme.gl}`,
+              minWidth: "125px",
+              maxWidth: "220px",
             }}
           >
-            <span className="truncate">{name}</span>
-            <span className="text-[9px] opacity-90 px-1 py-0.2 rounded bg-black/25 text-white">
+            <span className="truncate drop-shadow-md text-amber-100 font-black">{name}</span>
+            <span className="text-[10px] sm:text-xs font-black px-2 py-0.5 rounded-full bg-black/45 text-amber-200 border border-amber-300/50 shadow-inner">
               {theme.r}
             </span>
           </div>
