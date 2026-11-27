@@ -165,6 +165,20 @@ export function ShipPackageStudio() {
   const [storeUploadedPreview, setStoreUploadedPreview] = useState<string>("");
   const [storeUploading, setStoreUploading] = useState(false);
 
+  // حالة نافذة إضافة سفينة أو مستوى جديد
+  const [showAddShipModal, setShowAddShipModal] = useState(false);
+  const [newShipTier, setNewShipTier] = useState<number>(1);
+  const [newShipName, setNewShipName] = useState("");
+  const [newShipClass, setNewShipClass] = useState("مدمرة حربية");
+  const [newShipPrice, setNewShipPrice] = useState<number>(50000);
+  const [newShipCurrency, setNewShipCurrency] = useState<"gold" | "gem">("gold");
+  const [newShipHp, setNewShipHp] = useState<number>(3500);
+  const [newShipSpeed, setNewShipSpeed] = useState<number>(18);
+  const [newShipDesc, setNewShipDesc] = useState("");
+  const [newShipBlob, setNewShipBlob] = useState<Blob | null>(null);
+  const [newShipPreview, setNewShipPreview] = useState("");
+  const [creatingShip, setCreatingShip] = useState(false);
+
   // فحص صلاحيات الأدمن
   useEffect(() => {
     void isArtworkAdmin()
@@ -460,6 +474,80 @@ export function ShipPackageStudio() {
       setStatusMsg({ text: `فشل نشر صورة المنتج: ${e.message}`, type: "err" });
     } finally {
       setStoreUploading(false);
+    }
+  };
+
+  // إضافة سفينة أو مستوى جديد بالكامل وحفظها
+  const handleCreateNewShip = async () => {
+    if (!newShipName.trim()) {
+      setStatusMsg({ text: "يرجى كتابة اسم السفينة الجديدة.", type: "err" });
+      return;
+    }
+    setCreatingShip(true);
+    setStatusMsg({ text: "جاري حفظ ونشر السفينة الجديدة ومستواها...", type: "info" });
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const customId = Math.floor(1000 + Math.random() * 9000);
+      const productId = `custom-ship-${customId}`;
+
+      let uploadedPhotoUrl = "/assets/ships/cutter.png";
+      if (newShipBlob && user) {
+        const fileName = `ship-custom-${customId}-${Date.now()}.png`;
+        const storagePath = `${user.id}/${fileName}`;
+        const { error: upErr } = await supabase.storage
+          .from("game-artwork")
+          .upload(storagePath, newShipBlob, { contentType: "image/png", upsert: true });
+
+        if (!upErr) {
+          const { data: urlData } = supabase.storage.from("game-artwork").getPublicUrl(storagePath);
+          if (urlData?.publicUrl) uploadedPhotoUrl = urlData.publicUrl;
+
+          await supabase.from("artwork_poses").insert({
+            category: "ship",
+            subject: `ship-${customId}`,
+            pose: "idle",
+            image_path: storagePath,
+            created_by: user.id,
+          });
+        }
+      }
+
+      const extraData = {
+        tier: newShipTier,
+        class_ar: newShipClass || "سفينة بحرية",
+        class_en: "Custom Ship",
+        hp: newShipHp || 3000,
+        speed: newShipSpeed || 15,
+        currency: newShipCurrency,
+        photo: uploadedPhotoUrl,
+        desc: newShipDesc,
+        tripSeconds: 120 + newShipTier * 30,
+        weapons: ["cannon"],
+      };
+
+      const err = await saveOverride({
+        product_id: productId,
+        name: newShipName.trim(),
+        price: newShipPrice,
+        description: JSON.stringify(extraData),
+        hidden: false,
+      });
+
+      if (err) throw err;
+
+      await announceArtworkUpdate();
+      setStatusMsg({ text: `تم بنجاح إضافة السفينة «${newShipName}» في المستوى ${newShipTier}!`, type: "ok" });
+      setShowAddShipModal(false);
+      setNewShipName("");
+      setNewShipDesc("");
+      setNewShipBlob(null);
+      setNewShipPreview("");
+      setSelectedTier(newShipTier);
+      setSelectedShipId(customId);
+    } catch (e: any) {
+      setStatusMsg({ text: `فشل إنشاء السفينة: ${e?.message || e}`, type: "err" });
+    } finally {
+      setCreatingShip(false);
     }
   };
 
