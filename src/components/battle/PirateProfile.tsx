@@ -142,35 +142,33 @@ export function PirateProfile({
     };
   }, [world.id]);
 
-  // Enemy fleet derivation (placed inside safe berths in water)
+  // Enemy fleet: identical to the 3 real docked berths in the player's ocean
   const enemyFleet = useMemo<OceanEnemyShip[]>(() => {
-    const pool = fleetCatalog;
-    const count = 3 + (seed % 3); // 3 to 5 ships
     const fishKeys = Object.keys(FISH) as FishId[];
     const list: OceanEnemyShip[] = [];
+    const activeLanes = lanes.length > 0 ? lanes.slice(0, 3) : defaultLanes;
 
-    for (let i = 0; i < count; i++) {
-      const ship = pool[(seed + i * 3) % pool.length] ?? pool[0]!;
-      const maxHp = 100 + ((seed + i * 17) % 80);
-      const lane = lanes[i % lanes.length] || { dockX: 30 + i * 18, dockY: 50 + (i % 2) * 12 };
-      const fishId = fishKeys[(seed + i * 5) % fishKeys.length] ?? "sardine";
-      const fishCount = 6 + ((seed + i * 7) % 24);
-      const rot = ((seed + i * 11) % 15) - 7;
+    activeLanes.forEach((lane, i) => {
+      const ship = fleetCatalog[i] || fleetCatalog[0]!;
+      const maxHp = 100;
+      const fishId = fishKeys[i % fishKeys.length] ?? "sardine";
+      const fishCount = 10 + i * 8;
 
       list.push({
         id: i + 1,
         ship,
         topPct: lane.dockY,
         leftPct: lane.dockX,
-        rotationDeg: rot,
+        rotationDeg: 0,
         hp: maxHp,
         maxHp,
         fishCargo: { id: fishId, count: fishCount },
         sunk: false,
       });
-    }
+    });
+
     return list;
-  }, [seed, lanes]);
+  }, [lanes]);
 
   const [fleet, setFleet] = useState<OceanEnemyShip[]>(enemyFleet);
 
@@ -364,7 +362,7 @@ export function PirateProfile({
                   }}
                 >
                   <MessageCircle size={17} />
-                  <span>محادثة</span>
+                  <span>مراسلة</span>
                 </button>
               )}
 
@@ -437,9 +435,67 @@ export function PirateProfile({
               }}
               onClick={() => {
                 playCustomAudio("click");
-                setSelectedShipId(s.id);
+                setSelectedShipId((curr) => (curr === s.id ? null : s.id));
               }}
             >
+              {/* 3 Circular Action Orbs (Attack, Plunder, Support) directly floating above ship */}
+              {isSelected && !s.sunk && (
+                <div
+                  className="ship-actions enemy-ship-actions"
+                  role="menu"
+                  aria-label={`أوامر السفينة ${s.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="ship-orb ship-orb-attack"
+                    onClick={() => {
+                      playCustomAudio("click");
+                      setModal("attack");
+                    }}
+                    title="هجوم بالسلاح"
+                  >
+                    <i>
+                      <Swords size={20} />
+                    </i>
+                    <span>هجوم</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="ship-orb ship-orb-plunder"
+                    onClick={() => {
+                      playCustomAudio("click");
+                      setModal("plunder");
+                    }}
+                    title="نهب وسرقة"
+                  >
+                    <i>
+                      <Anchor size={20} />
+                    </i>
+                    <span>نهب</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="ship-orb ship-orb-support"
+                    onClick={() => {
+                      playCustomAudio("click");
+                      setModal("support");
+                    }}
+                    title="دعم وإسناد"
+                  >
+                    <i>
+                      <Shield size={20} />
+                    </i>
+                    <span>دعم</span>
+                  </button>
+                </div>
+              )}
+
               {/* Fallback Hull (kept subtle; WebGL draws main hull into waves) */}
               <div className="ship-fallback-hull">
                 <img
@@ -480,57 +536,7 @@ export function PirateProfile({
         })}
       </div>
 
-      {/* FLOATING ACTION DOCK: 3 ROYAL BUTTONS (ATTACK, PLUNDER, SUPPORT) */}
-      {target && !target.sunk && (
-        <div className="enemy-action-dock">
-          <div className="enemy-action-bar daily-panel">
-            <button
-              type="button"
-              className="enemy-act-btn btn-attack"
-              onClick={() => {
-                playCustomAudio("click");
-                setModal("attack");
-              }}
-            >
-              <div className="enemy-act-icon-wrap">
-                <Swords size={22} />
-              </div>
-              <b>هجوم بالسلاح</b>
-              <small>قصف وتدمير</small>
-            </button>
-
-            <button
-              type="button"
-              className="enemy-act-btn btn-plunder"
-              onClick={() => {
-                playCustomAudio("click");
-                setModal("plunder");
-              }}
-            >
-              <div className="enemy-act-icon-wrap">
-                <Anchor size={22} />
-              </div>
-              <b>نهب وسرقة</b>
-              <small>إرسال سفينة صيد</small>
-            </button>
-
-            <button
-              type="button"
-              className="enemy-act-btn btn-support"
-              onClick={() => {
-                playCustomAudio("click");
-                setModal("support");
-              }}
-            >
-              <div className="enemy-act-icon-wrap">
-                <Shield size={22} />
-              </div>
-              <b>دعم وإسناد</b>
-              <small>إرسال قبطان وطاقم</small>
-            </button>
-          </div>
-        </div>
-      )}
+{/* Removed bottom dock - buttons now float directly above ship */}
 
       {/* MODAL POPUPS IN DAILY REWARD STYLE */}
       {modal && (
@@ -953,6 +959,68 @@ export function PirateProfile({
           border-radius: 9999px;
           border: 1px solid rgba(147, 197, 253, 0.35);
           white-space: nowrap;
+        }
+
+        /* 3 CIRCULAR FLOATING ORBS OVER SELECTED ENEMY SHIP */
+        .enemy-ship-actions {
+          position: absolute;
+          z-index: 60;
+          left: 50%;
+          bottom: 88%;
+          display: flex;
+          gap: 0.55rem;
+          translate: -50% 0;
+          align-items: flex-end;
+          pointer-events: auto;
+          animation: ship-orb-in 260ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+        }
+        .enemy-ship-actions .ship-orb {
+          display: grid;
+          justify-items: center;
+          gap: 0.2rem;
+          background: none;
+          border: 0;
+          cursor: pointer;
+          transition: transform 180ms ease;
+        }
+        .enemy-ship-actions .ship-orb:hover {
+          transform: scale(1.15) translateY(-3px);
+        }
+        .enemy-ship-actions .ship-orb i {
+          display: grid;
+          place-items: center;
+          width: 2.8rem;
+          aspect-ratio: 1;
+          border-radius: 50%;
+          border: 2px solid #ffd45a;
+          color: #fff;
+          transition: box-shadow 180ms;
+        }
+        .enemy-ship-actions .ship-orb-attack i {
+          background: radial-gradient(circle at 35% 30%, #ef4444, #7f1d1d 75%);
+          border-color: #fca5a5;
+          box-shadow: 0 0 16px rgba(239, 68, 68, 0.65), 0 4px 10px rgba(0,0,0,0.6);
+        }
+        .enemy-ship-actions .ship-orb-plunder i {
+          background: radial-gradient(circle at 35% 30%, #f59e0b, #78350f 75%);
+          border-color: #fde68a;
+          box-shadow: 0 0 16px rgba(245, 158, 11, 0.65), 0 4px 10px rgba(0,0,0,0.6);
+        }
+        .enemy-ship-actions .ship-orb-support i {
+          background: radial-gradient(circle at 35% 30%, #3b82f6, #1e3a8a 75%);
+          border-color: #bfdbfe;
+          box-shadow: 0 0 16px rgba(59, 130, 246, 0.65), 0 4px 10px rgba(0,0,0,0.6);
+        }
+        .enemy-ship-actions .ship-orb span {
+          padding: 0.1rem 0.55rem;
+          border-radius: 999px;
+          background: rgba(10, 20, 36, 0.9);
+          border: 1px solid rgba(255, 212, 90, 0.6);
+          color: #ffd45a;
+          font-size: 0.68rem;
+          font-weight: 900;
+          white-space: nowrap;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.6);
         }
 
         /* 3 ROYAL FLOATING ACTION BUTTONS DOCK */
