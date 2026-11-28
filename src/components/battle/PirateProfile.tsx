@@ -328,7 +328,7 @@ export function PirateProfile({
             {/* Captain Avatar with Equipped Frame & Info */}
             <div className="enemy-captain-badge">
               <div className="enemy-avatar-wrap">
-                <CosmeticFrame themeIndex={frameIndex} size={78}>
+                <CosmeticFrame themeIndex={frameIndex} size={104} pulse={true}>
                   <img
                     src={player?.avatar_url || CAPTAINS[Math.abs(typeof player?.avatar_index === "number" ? player.avatar_index : seed) % CAPTAINS.length]}
                     alt=""
@@ -338,13 +338,25 @@ export function PirateProfile({
                 </CosmeticFrame>
               </div>
 
-              <div className="enemy-player-meta">
-                <span className="enemy-kicker-tag">محيط الخصم • {world.name || "بحر القراصنة"}</span>
-                <div className="enemy-c-name-row">
-                  <h1 className="enemy-c-name">{safeName}</h1>
-                  {player?.score !== undefined && (
-                    <span className="enemy-c-rank">[{player.score.toLocaleString("ar")} مجد]</span>
-                  )}
+              <div
+                className="flex flex-col items-center justify-center gap-1 px-4 py-1.5 sm:px-6 sm:py-2 rounded-2xl shadow-2xl border-2 border-amber-300/80 backdrop-blur-md transition-all duration-300"
+                style={{
+                  background: "linear-gradient(135deg, rgba(20, 24, 40, 0.95), rgba(10, 14, 26, 0.95))",
+                  boxShadow: "0 10px 28px rgba(0,0,0,0.85), 0 0 22px rgba(245, 158, 11, 0.4)",
+                  minWidth: "160px",
+                  maxWidth: "280px",
+                }}
+              >
+                <div className="flex items-center justify-between w-full gap-2">
+                  <span className="truncate drop-shadow-lg text-amber-100 font-black text-sm sm:text-base tracking-wide">{safeName}</span>
+                  <span className="text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-black/50 text-amber-300 border border-amber-300/60 shadow-inner">
+                    {world.name || "محيط القراصنة"}
+                  </span>
+                </div>
+
+                <div className="w-full flex items-center justify-between gap-1 text-[11px] font-black text-amber-200">
+                  <span>المجد البحري:</span>
+                  <span className="text-amber-400 font-black">{(player?.score ?? 1250).toLocaleString("ar")} مجد</span>
                 </div>
               </div>
             </div>
