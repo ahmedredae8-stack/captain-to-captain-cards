@@ -201,7 +201,7 @@ export function TopHud({
         >
           <div className="relative flex items-center justify-center">
             {/* إطار فاخر رئيسي بمقاس 78 بكسل ليكون واضحاً ومهيباً */}
-            <CosmeticFrame themeIndex={activeIndex} size={94}>
+            <CosmeticFrame themeIndex={activeIndex} size={104} pulse={true}>
               {avatarNode ?? (
                 <img
                   src={resolvedAvatarSrc}
@@ -214,9 +214,9 @@ export function TopHud({
 
             {normalizedPct !== null && (
               <svg
-                viewBox="0 0 108 108"
-                width={100}
-                height={100}
+                viewBox="0 0 118 118"
+                width={112}
+                height={112}
                 style={{
                   position: "absolute",
                   inset: -3,
@@ -225,7 +225,7 @@ export function TopHud({
                 }}
                 aria-hidden="true"
               >
-                <circle cx={54} cy={54} r={48} fill="none" stroke="rgba(0,0,0,.45)" strokeWidth={3.5} />
+                <circle cx={59} cy={59} r={52} fill="none" stroke="rgba(0,0,0,.45)" strokeWidth={3.5} />
                 <circle
                   cx={54}
                   cy={54}
@@ -234,8 +234,8 @@ export function TopHud({
                   stroke={theme.f[0]}
                   strokeWidth={3.5}
                   strokeLinecap="round"
-                  strokeDasharray={2 * Math.PI * 48}
-                  strokeDashoffset={2 * Math.PI * 48 * (1 - normalizedPct / 100)}
+                  strokeDasharray={2 * Math.PI * 52}
+                  strokeDashoffset={2 * Math.PI * 52 * (1 - normalizedPct / 100)}
                 />
               </svg>
             )}
@@ -251,21 +251,39 @@ export function TopHud({
             </span>
           </div>
 
-          {/* فقاعة اسم القبطان الفخمة والبارزة جداً بتنسيق ملكي */}
+          {/* فقاعة اسم وخبرة القبطان الفخمة والمهيبة بمساحة واسعة */}
           <div
-            className="inline-flex items-center justify-center gap-2 px-4 py-1 sm:px-5 sm:py-1.5 mt-1 text-xs sm:text-sm font-black rounded-full shadow-2xl border-2 border-amber-300/80 backdrop-blur-md transition-all duration-300"
+            className="flex flex-col items-center justify-center gap-1 px-4 py-1.5 sm:px-6 sm:py-2 mt-1.5 rounded-2xl shadow-2xl border-2 border-amber-300/80 backdrop-blur-md transition-all duration-300"
             style={{
               background: `linear-gradient(135deg, ${theme.p[0]}, ${theme.p[1]})`,
-              color: theme.p[2] || "#fff",
-              boxShadow: `0 8px 24px rgba(0,0,0,0.85), 0 0 18px ${theme.gl}`,
-              minWidth: "125px",
-              maxWidth: "220px",
+              boxShadow: `0 10px 28px rgba(0,0,0,0.85), 0 0 22px ${theme.gl}`,
+              minWidth: "160px",
+              maxWidth: "280px",
             }}
           >
-            <span className="truncate drop-shadow-md text-amber-100 font-black">{name}</span>
-            <span className="text-[10px] sm:text-xs font-black px-2 py-0.5 rounded-full bg-black/45 text-amber-200 border border-amber-300/50 shadow-inner">
-              {theme.r}
-            </span>
+            <div className="flex items-center justify-between w-full gap-2">
+              <span className="truncate drop-shadow-lg text-amber-100 font-black text-sm sm:text-base tracking-wide">{name}</span>
+              <span className="text-[10px] sm:text-xs font-black px-2.5 py-0.5 rounded-full bg-black/50 text-amber-300 border border-amber-300/60 shadow-inner">
+                {theme.r}
+              </span>
+            </div>
+
+            {normalizedPct !== null && (
+              <div className="w-full flex items-center gap-1.5">
+                <div className="flex-1 h-2 rounded-full bg-black/60 overflow-hidden border border-white/20">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${normalizedPct}%`,
+                      background: "linear-gradient(90deg, #f59e0b, #fde047)",
+                    }}
+                  />
+                </div>
+                <span className="text-[10px] font-black text-amber-200 drop-shadow">
+                  {Math.round(normalizedPct)}% XP
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
